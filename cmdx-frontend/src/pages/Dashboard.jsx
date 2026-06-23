@@ -68,7 +68,9 @@ function Dashboard() {
         const data = await getForecast(selectedFactory, selectedPart);
         setForecast(data);
 
-        if (data?.indicators?.usd_jpy) {
+        if (data?.current_indicators?.usd_jpy) {
+          setSimRate(data.current_indicators.usd_jpy);
+        } else if (data?.indicators?.usd_jpy) {
           setSimRate(data.indicators.usd_jpy);
         }
       } catch (err) {
@@ -175,47 +177,60 @@ function Dashboard() {
 
           <ForecastChart chartData={forecast.forecast_chart} />
 
-          <section className="indicator-grid">
-            <div className="info-card">
-              <p>ドル/円為替</p>
-
-              <h2>
-                {forecast.indicators.usd_jpy}円
-              </h2>
-
-              <span>
-                取得日：
-                {forecast.indicators.usd_jpy_date}
-              </span>
+          {/* 🌟 修正ポイント：インジケーターを「過去の予測前提」と「本日」の計6つに拡張 */}
+          <h3 style={{ margin: "20px 0 10px 0", color: "#4A5568" }}>外部経済指標・環境データ（全6項目）</h3>
+          <section className="indicator-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "20px" }}>
+            
+            {/* 1. 過去の為替 */}
+            <div className="info-card" style={{ borderLeft: "4px solid #4299e1" }}>
+              <p style={{ color: "#718096", fontSize: "0.9rem" }}>ドル/円為替（予測前提）</p>
+              <h2>{forecast.indicators?.usd_jpy ?? "-"}円</h2>
+              <span>取得日：{forecast.indicators?.usd_jpy_date ?? "-"}</span>
             </div>
 
-            <div className="info-card">
-              <p>製造業PMI</p>
-
-              <h2>
-                {forecast.indicators.pmi}
-              </h2>
-
-              <span>
-                取得日：
-                {forecast.indicators.pmi_date}
-              </span>
+            {/* 2. 過去のPMI */}
+            <div className="info-card" style={{ borderLeft: "4px solid #4299e1" }}>
+              <p style={{ color: "#718096", fontSize: "0.9rem" }}>製造業PMI（予測前提）</p>
+              <h2>{forecast.indicators?.pmi ?? "-"}</h2>
+              <span>取得日：{forecast.indicators?.pmi_date ?? "-"}</span>
             </div>
 
-            <div className="info-card">
-              <p>気象情報</p>
-
-              <h2>
-                {forecast.indicators.temperature}℃
-              </h2>
-
+            {/* 3. 過去の気象 */}
+            <div className="info-card" style={{ borderLeft: "4px solid #4299e1" }}>
+              <p style={{ color: "#718096", fontSize: "0.9rem" }}>気象情報（予測前提）</p>
+              <h2>{forecast.indicators?.temperature ?? "-"}℃</h2>
               <span>
-                予測：
-                {forecast.forecast_chart?.slice(-1)[0]?.date}
+                予測：{forecast.forecast_chart?.slice(-1)[0]?.date ?? "-"}
                 <br />
-                {forecast.indicators.weather_message}
+                {forecast.indicators?.weather_message ?? "-"}
               </span>
             </div>
+
+            {/* 4. 本日の為替 */}
+            <div className="info-card" style={{ borderLeft: "4px solid #48bb78" }}>
+              <p style={{ color: "#2f855a", fontWeight: "bold", fontSize: "0.9rem" }}>🟢 本日のドル/円為替</p>
+              <h2>{forecast.current_indicators?.usd_jpy ?? "-"}円</h2>
+              <span>取得日：{forecast.current_indicators?.usd_jpy_date ?? "-"}</span>
+            </div>
+
+            {/* 5. 本日のPMI */}
+            <div className="info-card" style={{ borderLeft: "4px solid #48bb78" }}>
+              <p style={{ color: "#2f855a", fontWeight: "bold", fontSize: "0.9rem" }}>🟢 最新の製造業PMI</p>
+              <h2>{forecast.current_indicators?.pmi ?? "-"}</h2>
+              <span>取得日：{forecast.current_indicators?.pmi_date ?? "-"}</span>
+            </div>
+
+            {/* 6. 本日の気象 */}
+            <div className="info-card" style={{ borderLeft: "4px solid #48bb78" }}>
+              <p style={{ color: "#2f855a", fontWeight: "bold", fontSize: "0.9rem" }}>🟢 本日の気象情報</p>
+              <h2>{forecast.current_indicators?.temperature ?? "-"}℃</h2>
+              <span>
+                ステータス：
+                <br />
+                {forecast.current_indicators?.weather_message ?? "-"}
+              </span>
+            </div>
+
           </section>
         </>
       )}
@@ -239,12 +254,12 @@ function Dashboard() {
           <div className="detail-grid">
             <div>
               <h3>需要変動の要因</h3>
-              <p>
-                為替、PMI、気象データを組み合わせて需要変動を分析しています。
-              </p>
-              <p>ドル円：{forecast.indicators.usd_jpy}円</p>
-              <p>PMI：{forecast.indicators.pmi}</p>
-              <p>気温：{forecast.indicators.temperature}℃</p>
+              <p>過去の実績データと本日のリアルタイム指標を比較・分析しています。</p>
+              <h4 style={{ margin: "10px 0 5px 0" }}>【予測モデル適用値】</h4>
+              <p>ドル円：{forecast.indicators?.usd_jpy}円 / PMI：{forecast.indicators?.pmi} / 気温：{forecast.indicators?.temperature}℃</p>
+              
+              <h4 style={{ margin: "10px 0 5px 0", color: "#2f855a" }}>【本日リアルタイム値】</h4>
+              <p>ドル円：{forecast.current_indicators?.usd_jpy}円 / PMI：{forecast.current_indicators?.pmi} / 気温：{forecast.current_indicators?.temperature}℃</p>
             </div>
 
             <div>
@@ -302,8 +317,8 @@ function Dashboard() {
           <label>対象部品</label>
           <input value={`${forecast.parts_id} ${forecast.parts_name}`} disabled />
 
-          <label>現在のドル円レート</label>
-          <input value={forecast.indicators.usd_jpy} disabled />
+          <label>現在のリアルタイム為替レート</label>
+          <input value={`${forecast.current_indicators?.usd_jpy ?? forecast.indicators?.usd_jpy} 円`} disabled />
 
           <label>シミュレーション用ドル円レート</label>
           <input
