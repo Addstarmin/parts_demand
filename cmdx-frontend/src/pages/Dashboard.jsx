@@ -8,6 +8,7 @@ import {
   getParts,
   runSimulation,
 } from "../services/api";
+import AlertPanel from "../components/AlertPanel";
 
 function Dashboard() {
   const [currentPage, setCurrentPage] = useState("dashboard");
@@ -139,6 +140,7 @@ function Dashboard() {
 
       {forecast && (
         <>
+          <AlertPanel forecast={forecast} />
           <section className="kpi-grid">
             <KpiCard
               title="発注推奨ステータス"
