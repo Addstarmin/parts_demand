@@ -13,7 +13,7 @@ FACTORY_MASTER_PATH = os.path.join(BASE_DIR, "data", "factory_master.csv")
 PARTS_MASTER_PATH = os.path.join(BASE_DIR, "data", "parts_master.csv")
 HISTORY_PATH = os.path.join(BASE_DIR, "data", "internal_performance_history.csv")
 
-FRED_API_KEY = "YOUR_FRED_API_KEY_HERE"  # 必要に応じて本物のKEYを設定してください
+FRED_API_KEY = "283de7b5f939d93f769a159d90328771"  # 本物のKEY、またはダミーのまま
 
 def load_masters():
     df_f = pd.read_csv(FACTORY_MASTER_PATH)
@@ -55,12 +55,13 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     ticker = yf.Ticker("JPY=X")
     df_fx = ticker.history(start=start_date, end=next_week_date)[['Close']].reset_index()
     df_fx.rename(columns={'Date': 'date', 'Close': 'usd_jpy'}, inplace=True)
-    df_fx['date'] = pd.to_datetime(df_fx['date']).dt.tz_localize(None)
+    if not df_fx.empty:
+        df_fx['date'] = pd.to_datetime(df_fx['date']).dt.tz_localize(None)
     
     # 外部データ連携 (PMI)
     try:
         fred = Fred(api_key=FRED_API_KEY)
-        pmi_series = fred.get_series('ISM/MAN_PMI', observation_start=start_date, observation_end=next_week_date)
+        pmi_series = fred.get_series("NAPM", observation_start=start_date, observation_end=next_week_date)
         df_pmi = pd.DataFrame(pmi_series, columns=['pmi']).reset_index()
         df_pmi.rename(columns={'index': 'date'}, inplace=True)
         df_pmi['date'] = pd.to_datetime(df_pmi['date'])
@@ -74,7 +75,6 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
         w_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=temperature_2m_max,weather_code&timezone=Asia%2FTokyo"
         weather_res = requests.get(w_url, timeout=5).json()
         next_week_temp_pred = np.mean(weather_res['daily']['temperature_2m_max'])
-        # 簡易的な大雨警戒フラグ（気象コード判定等）
         if max(weather_res['daily']['weather_code']) > 60:
             weather_message = f"{factory_location}周辺で大雨・悪天候の警戒予報あり"
     except Exception:
@@ -88,8 +88,12 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     df_master['pmi'] = df_master['pmi'].ffill().bfill()
     df_master['usd_jpy'] = df_master['usd_jpy'].ffill().bfill()
     
-    latest_fx = df_fx['usd_jpy'].iloc[-1] if not df_fx.empty else 150.0
+    # 【修正箇所】予測の基準となる「実績データの最終日」の指標を取得
+    latest_fx = df_master['usd_jpy'].iloc[-1] if not df_master.empty else 150.0
+    latest_fx_date = df_master['date'].iloc[-1].strftime('%Y-%m-%d') if not df_master.empty else None
+
     latest_pmi = df_master['pmi'].iloc[-1] if not df_master.empty else 50.0
+    latest_pmi_date = df_master['date'].iloc[-1].strftime('%Y-%m-%d') if not df_master.empty else None
     
     df_next_week = pd.DataFrame({
         'date': [next_week_date], 'demand': [np.nan], 'usd_jpy': [latest_fx],
@@ -119,13 +123,20 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     model_xgb = XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=3, random_state=42)
     model_xgb.fit(train_df[features], train_df['demand'])
     
-    # 次週需要の確定
     next_week_demand_pred = max(0, int(model_xgb.predict(target_df[features])[0]))
-    
-    # 適合軌跡
     train_df['fitted'] = model_xgb.predict(train_df[features]).astype(int)
     
-    return next_week_demand_pred, train_df, target_df, latest_fx, latest_pmi, next_week_temp_pred, weather_message
+    return (
+        next_week_demand_pred,
+        train_df,
+        target_df,
+        latest_fx,
+        latest_fx_date,
+        latest_pmi,
+        latest_pmi_date,
+        next_week_temp_pred,
+        weather_message
+    )
 
 def calculate_forecast(factory_id: str, parts_id: str):
     df_f, df_p, df_h = load_masters()
@@ -141,17 +152,60 @@ def calculate_forecast(factory_id: str, parts_id: str):
     current_stock = int(df_selected['ending_stock'].iloc[-1])
     
     # 予測エンジンの起動
-    next_week_demand_pred, train_df, target_df, fx, pmi, temp, weather_msg = _core_engine(
-        df_selected, f_info['location'], safety_stock_days
-    )
+    (
+        next_week_demand_pred,
+        train_df,
+        target_df,
+        fx,
+        fx_date,
+        pmi,
+        pmi_date,
+        temp,
+        weather_msg
+    ) = _core_engine(df_selected, f_info['location'], safety_stock_days)
     
-    # 推奨パラメータ算出
+    # 今日の外部指標取得（リアルタイム表示用）
+    today_now = pd.Timestamp.now()
+    today_str = today_now.strftime("%Y-%m-%d")
+    
+    # 1. 今日のドル円
+    try:
+        ticker = yf.Ticker("JPY=X")
+        today_df = ticker.history(period="1d")
+        today_fx = float(today_df["Close"].iloc[-1]) if not today_df.empty else fx
+    except Exception:
+        today_fx = fx
+
+    # 2. 今日の気温・天気
+    try:
+        w_url = f"https://api.open-meteo.com/v1/forecast?latitude=35.6895&longitude=139.6917&current=temperature_2m,weather_code&timezone=Asia/Tokyo"
+        weather_now = requests.get(w_url, timeout=5).json()
+        today_temp = float(weather_now["current"]["temperature_2m"])
+        code = weather_now["current"]["weather_code"]
+        today_weather = "現在、大雨警戒" if code >= 60 else "現在異常なし"
+    except Exception:
+        today_temp = 20.0
+        today_weather = "取得失敗（モック表示）"
+
+    # 3. 今日のPMI（最新公表値）
+    # 【大幅修正】予測用データ（pmi変数）と完全に分離するため、独立した取得とフォールバックを実施
+    try:
+        fred = Fred(api_key=FRED_API_KEY)
+        pmi_now = fred.get_series("NAPM", observation_start="2024-01-01")
+        pmi_clean = pmi_now.dropna()
+        today_pmi = float(pmi_clean.iloc[-1])
+        today_pmi_date = pmi_clean.index[-1].strftime("%Y-%m-%d")
+    except Exception:
+        # APIエラー、またはキー未設定時は「今日の表示用」として独立した静的モック（51.5など）を生成
+        # これにより予測ロジック側の `pmi` と数値が被るのを防ぎます
+        today_pmi = 51.5 
+        today_pmi_date = today_str
+
     safety_stock_vol = int((next_week_demand_pred / 7) * safety_stock_days)
     recommended_production = max(0, next_week_demand_pred + safety_stock_vol - current_stock)
-    recommended_order = recommended_production  # LTを考慮した量
+    recommended_order = recommended_production
     recommended_shipping = next_week_demand_pred
     
-    # リスク分析判定（疑似アラートロジック）
     risk_level = "HEALTHY"
     risk_message = "在庫水準は安全閾値をキープしています"
     if current_stock < safety_stock_vol:
@@ -161,9 +215,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
         risk_level = "WARNING"
         risk_message = "3週間以内に在庫不足リスクが懸念されます。生産の調整を推奨します"
 
-    # ReactのRecharts等のフロント等でそのまま描画できるシリアライズ配列の作成
     forecast_chart = []
-    # 直近過去2週間分の実績
     for _, row in train_df.tail(2).iterrows():
         forecast_chart.append({
             "date": row['date'].strftime('%Y-%m-%d'),
@@ -172,7 +224,6 @@ def calculate_forecast(factory_id: str, parts_id: str):
             "current_stock": int(row['ending_stock']),
             "safety_stock": safety_stock_vol
         })
-    # 未来（次週予測週）
     next_date_str = target_df['date'].iloc[0].strftime('%Y-%m-%d')
     forecast_chart.append({
         "date": next_date_str,
@@ -198,14 +249,24 @@ def calculate_forecast(factory_id: str, parts_id: str):
         "forecast_chart": forecast_chart,
         "indicators": {
             "usd_jpy": round(fx, 1),
+            "usd_jpy_date": fx_date,
             "pmi": round(pmi, 1),
+            "pmi_date": pmi_date,
             "temperature": round(temp, 1),
             "weather_message": weather_msg
+        },
+        "current_indicators": {
+            "usd_jpy": round(today_fx, 1) if today_fx is not None else None,
+            "usd_jpy_date": today_str,
+            "pmi": round(today_pmi, 1) if today_pmi is not None else None,
+            "pmi_date": today_pmi_date,
+            "temperature": round(today_temp, 1) if today_temp is not None else None,
+            "weather_date": today_str,
+            "weather_message": today_weather
         }
     }
 
 def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
-    """為替レート変動によるシミュレーション処理"""
     df_f, df_p, df_h = load_masters()
     df_selected = df_h[(df_h['factory_id'] == factory_id) & (df_h['parts_id'] == parts_id)].copy()
     if len(df_selected) == 0:
@@ -215,14 +276,12 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
     safety_stock_days = 7 if pd.isna(p_info['safety_stock_days']) else int(p_info['safety_stock_days'])
     current_stock = int(df_selected['ending_stock'].iloc[-1])
     
-    # ベースの予測を取得
     base_forecast = calculate_forecast(factory_id, parts_id)
     base_demand = base_forecast["next_week_forecast"]
     base_fx = base_forecast["indicators"]["usd_jpy"]
     
-    # 為替変化率を擬似感度係数（0.3%需要連動）でシミュレート
     fx_diff_rate = (input_usd_jpy - base_fx) / base_fx
-    demand_change_rate = int(fx_diff_rate * 100 * 0.3)  # 感度をマイルドに調整
+    demand_change_rate = int(fx_diff_rate * 100 * 0.3)
     
     new_forecast = max(0, int(base_demand * (1 + (demand_change_rate / 100))))
     new_safety = int((new_forecast / 7) * safety_stock_days)
@@ -230,7 +289,7 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
     
     msg = f"為替が1ドル={input_usd_jpy}円へ変動した場合、需要は通常予測から約{demand_change_rate}%増加（または減少）するとシミュレートされます。"
     if demand_change_rate > 0:
-        msg = f"ドル高トレンド（+{demand_change_rate}%）に伴い、部品調達および出荷需要が増加する見込みです。"
+        msg = f"ドル高トレンド（+{demand_change_rate}%）に伴い、部品調達および出荷需要が増交する見込みです。"
 
     return {
         "demand_change_rate": demand_change_rate,

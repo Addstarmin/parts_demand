@@ -178,20 +178,43 @@ function Dashboard() {
           <section className="indicator-grid">
             <div className="info-card">
               <p>ドル/円為替</p>
-              <h2>{forecast.indicators.usd_jpy}円</h2>
-              <span>リアルタイム為替API</span>
+
+              <h2>
+                {forecast.indicators.usd_jpy}円
+              </h2>
+
+              <span>
+                取得日：
+                {forecast.indicators.usd_jpy_date}
+              </span>
             </div>
 
             <div className="info-card">
               <p>製造業PMI</p>
-              <h2>{forecast.indicators.pmi}</h2>
-              <span>50以上なら好景気傾向</span>
+
+              <h2>
+                {forecast.indicators.pmi}
+              </h2>
+
+              <span>
+                取得日：
+                {forecast.indicators.pmi_date}
+              </span>
             </div>
 
             <div className="info-card">
               <p>気象情報</p>
-              <h2>{forecast.indicators.temperature}℃</h2>
-              <span>{forecast.indicators.weather_message}</span>
+
+              <h2>
+                {forecast.indicators.temperature}℃
+              </h2>
+
+              <span>
+                予測：
+                {forecast.forecast_chart?.slice(-1)[0]?.date}
+                <br />
+                {forecast.indicators.weather_message}
+              </span>
             </div>
           </section>
         </>
