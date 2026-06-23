@@ -29,6 +29,7 @@ function Dashboard() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // 初回マスタ読み込み
   useEffect(() => {
     const initData = async () => {
       try {
@@ -60,32 +61,33 @@ function Dashboard() {
     initData();
   }, []);
 
+  // 工場・部品変更時の需要予測およびJIT出荷ピークの並行取得 (IT-01 連携対応)
   useEffect(() => {
     if (!selectedFactory || !selectedPart) return;
 
-    const loadForecast = async () => {
+    const loadForecastAndPeaks = async () => {
       try {
         setLoading(true);
         setError("");
         setSimResult("");
         setShipmentPeak(null);
 
-        const data = await getForecast(selectedFactory, selectedPart);
-        setForecast(data);
+        // 1. 基本需要予測データをフェッチ
+        const forecastData = await getForecast(selectedFactory, selectedPart);
+        setForecast(forecastData);
 
+        if (forecastData?.indicators?.usd_jpy) {
+          setSimRate(forecastData.indicators.usd_jpy);
+        }
+
+        // 2. 予測ボリュームに基づきJIT出荷ピーク予測を取得
         const peakData = await getShipmentPeak(
           selectedFactory,
           selectedPart,
-          data.next_week_forecast
+          forecastData.next_week_forecast
         );
-        console.log("forecast:", data);
-        console.log("next_week_forecast:", data.next_week_forecast);
-        console.log("peakData:", peakData);
         setShipmentPeak(peakData);
 
-        if (data?.indicators?.usd_jpy) {
-          setSimRate(data.indicators.usd_jpy);
-        }
       } catch (err) {
         setError(err.message);
         setForecast(null);
@@ -95,14 +97,17 @@ function Dashboard() {
       }
     };
 
-    loadForecast();
+    loadForecastAndPeaks();
   }, [selectedFactory, selectedPart]);
 
+  // 為替シミュレーション再計算処理のハンドリング拡張 (IT-01)
   const handleSimulation = async () => {
     setError("");
     setSimResult("");
+    if (!forecast) return;
 
     try {
+      setLoading(true);
       const result = await runSimulation({
         factoryId: selectedFactory,
         partsId: selectedPart,
@@ -110,8 +115,27 @@ function Dashboard() {
       });
 
       setSimResult(result.message);
+
+      // シミュレーション結果により動的スケーリングされた次週需要 (new_forecast) でJITピークも再計算
+      if (result.new_forecast !== undefined) {
+        const updatedPeakData = await getShipmentPeak(
+          selectedFactory,
+          selectedPart,
+          result.new_forecast
+        );
+        setShipmentPeak(updatedPeakData);
+        
+        // 既存UIの予測整合性を保つため部分的なステート同期
+        setForecast((prev) => ({
+          ...prev,
+          next_week_forecast: result.new_forecast,
+          recommended_order: result.new_recommended_order,
+        }));
+      }
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -191,6 +215,7 @@ function Dashboard() {
 
           <ForecastChart chartData={forecast.forecast_chart} />
 
+          {/* F-07 JIT出荷ピーク予測積層チャートコンポーネントをレイアウト構造を維持して埋め込み */}
           {shipmentPeak && (
             <ShipmentPeakChart
               data={shipmentPeak.peak_data}

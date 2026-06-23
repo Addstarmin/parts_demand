@@ -7,14 +7,15 @@ from fredapi import Fred
 from prophet import Prophet
 from xgboost import XGBRegressor
 
-
 # 各種CSVファイルへのパス定義
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FACTORY_MASTER_PATH = os.path.join(BASE_DIR, "data", "factory_master.csv")
 PARTS_MASTER_PATH = os.path.join(BASE_DIR, "data", "parts_master.csv")
 HISTORY_PATH = os.path.join(BASE_DIR, "data", "internal_performance_history.csv")
+JIT_HISTORY_PATH = os.path.join(BASE_DIR, "data", "jit_shipment_history.csv")
 
-FRED_API_KEY = "YOUR_FRED_API_KEY_HERE"  # 必要に応じて本物のKEYを設定してください
+# 実際の運用に合わせて適切なAPIキーを設定してください
+FRED_API_KEY = "YOUR_FRED_API_KEY_HERE"
 
 def load_masters():
     df_f = pd.read_csv(FACTORY_MASTER_PATH)
@@ -45,7 +46,7 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     try:
         headers = {'User-Agent': 'sc_demand_forecast_web_api'}
         geo_url = f"https://nominatim.openstreetmap.org/search?q={factory_location}&format=json&limit=1"
-        geo_res = requests.get(geo_url, headers=headers, timeout=5).json()
+        requests.get(geo_url, headers=headers, timeout=5).json()
         if geo_res:
             lat = float(geo_res[0]['lat'])
             lon = float(geo_res[0]['lon'])
@@ -68,14 +69,13 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     except Exception:
         pmi_dates = pd.date_range(start=start_date, end=next_week_date, freq='MS')
         df_pmi = pd.DataFrame({'date': pmi_dates, 'pmi': np.random.uniform(48, 53, len(pmi_dates))})
-        
+       
     # 天気予報連携
     weather_message = f"{factory_location}付近の気象に異常なし"
     try:
         w_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=temperature_2m_max,weather_code&timezone=Asia%2FTokyo"
         weather_res = requests.get(w_url, timeout=5).json()
         next_week_temp_pred = np.mean(weather_res['daily']['temperature_2m_max'])
-        # 簡易的な大雨警戒フラグ（気象コード判定等）
         if max(weather_res['daily']['weather_code']) > 60:
             weather_message = f"{factory_location}周辺で大雨・悪天候の警戒予報あり"
     except Exception:
@@ -162,9 +162,8 @@ def calculate_forecast(factory_id: str, parts_id: str):
         risk_level = "WARNING"
         risk_message = "3週間以内に在庫不足リスクが懸念されます。生産の調整を推奨します"
 
-    # ReactのRecharts等のフロント等でそのまま描画できるシリアライズ配列の作成
+    # チャートデータのシリアライズ配列
     forecast_chart = []
-    # 直近過去2週間分の実績
     for _, row in train_df.tail(2).iterrows():
         forecast_chart.append({
             "date": row['date'].strftime('%Y-%m-%d'),
@@ -173,7 +172,6 @@ def calculate_forecast(factory_id: str, parts_id: str):
             "current_stock": int(row['ending_stock']),
             "safety_stock": safety_stock_vol
         })
-    # 未来（次週予測週）
     next_date_str = target_df['date'].iloc[0].strftime('%Y-%m-%d')
     forecast_chart.append({
         "date": next_date_str,
@@ -216,14 +214,12 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
     safety_stock_days = 7 if pd.isna(p_info['safety_stock_days']) else int(p_info['safety_stock_days'])
     current_stock = int(df_selected['ending_stock'].iloc[-1])
     
-    # ベースの予測を取得
     base_forecast = calculate_forecast(factory_id, parts_id)
     base_demand = base_forecast["next_week_forecast"]
     base_fx = base_forecast["indicators"]["usd_jpy"]
     
-    # 為替変化率を擬似感度係数（0.3%需要連動）でシミュレート
     fx_diff_rate = (input_usd_jpy - base_fx) / base_fx
-    demand_change_rate = int(fx_diff_rate * 100 * 0.3)  # 感度をマイルドに調整
+    demand_change_rate = int(fx_diff_rate * 100 * 0.3)
     
     new_forecast = max(0, int(base_demand * (1 + (demand_change_rate / 100))))
     new_safety = int((new_forecast / 7) * safety_stock_days)
@@ -240,95 +236,115 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
         "new_recommended_order": new_recommended_order
     }
 
-def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int):
+def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int) -> dict:
     """
-    F-07 JIT出荷ピーク予測
+    F-07 JIT出荷ピーク予測・按分エンジン
     """
+    if not os.path.exists(JIT_HISTORY_PATH):
+        # ファイルが存在しない場合は一律均等配分でフォールバック
+        return _fallback_jit_peaks(factory_id, parts_id, next_week_volume, "実績データファイルが存在しません")
 
-    df = pd.read_csv("data/jit_shipment_history.csv")
-
+    df = pd.read_csv(JIT_HISTORY_PATH)
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-    target = df[
-        (df["factory_id"] == factory_id)
-        & (df["parts_id"] == parts_id)
-    ]
+    target = df[(df["factory_id"] == factory_id) & (df["parts_id"] == parts_id)].copy()
 
-    if target.empty:
-        return {
-            "peak_info": {
-                "day": "-",
-                "hour": "-",
-                "volume": 0,
-                "message": "実績データが存在しません"
-            },
-            "peak_data": []
-        }
+    # ゼロ除算・データ欠損(UT-02)時の均等配分(1/28)フォールバック処理
+    if target.empty or target["shipment_volume"].sum() == 0:
+        return _fallback_jit_peaks(factory_id, parts_id, next_week_volume, "実績データが存在しません。均等配分を適用します")
 
-    day_map = {
-        0: "月",
-        1: "火",
-        2: "水",
-        3: "木",
-        4: "金",
-        5: "土",
-        6: "日"
-    }
+    day_map = {0: "月", 1: "火", 2: "水", 3: "木", 4: "金", 5: "土", 6: "日"}
+    hours_list = ["06:30", "10:00", "15:30", "20:00"]
 
     target["day"] = target["timestamp"].dt.dayofweek
     target["hour"] = target["timestamp"].dt.strftime("%H:%M")
 
-    grouped = (
-        target.groupby(["day", "hour"])
-        ["shipment_volume"]
-        .sum()
-        .reset_index()
-    )
+    # 指定された4便以外のデータが入っている可能性を考慮し、固定時間帯のみに絞り込む
+    target = target[target["hour"].isin(hours_list)]
 
+    grouped = target.groupby(["day", "hour"])["shipment_volume"].sum().reset_index()
     total_volume = grouped["shipment_volume"].sum()
 
-    grouped["ratio"] = (
-        grouped["shipment_volume"] /
-        total_volume
-    )
+    if total_volume == 0:
+        return _fallback_jit_peaks(factory_id, parts_id, next_week_volume, "集計出荷量が0です。均等配分を適用します")
 
-    grouped["volume"] = (
-        grouped["ratio"] *
-        next_week_volume
-    ).round().astype(int)
+    # 1. 構成比率の算出
+    grouped["ratio"] = grouped["shipment_volume"] / total_volume
 
-    diff = (
-        next_week_volume -
-        grouped["volume"].sum()
-    )
+    # 2. 次週予測の分解
+    grouped["volume"] = (grouped["ratio"] * next_week_volume).round().astype(int)
 
+    # 3. 端数処理による整合性補正 (4.2 整合性補正処理)
+    diff = next_week_volume - grouped["volume"].sum()
     if diff != 0:
         idx = grouped["ratio"].idxmax()
         grouped.loc[idx, "volume"] += diff
 
-    peak_row = grouped.loc[
-        grouped["volume"].idxmax()
-    ]
-
+    # 4. 最大ピーク情報の抽出
+    peak_row = grouped.loc[grouped["volume"].idxmax()]
     peak_info = {
         "day": day_map[int(peak_row["day"])],
         "hour": peak_row["hour"],
         "volume": int(peak_row["volume"]),
-        "message":
-            f"{day_map[int(peak_row['day'])]}曜日 "
-            f"{peak_row['hour']} に最大出荷ピークが予測されます"
+        "message": f"{day_map[int(peak_row['day'])]}曜日 {peak_row['hour']} に最大出荷ピークが予測されます"
     }
 
+    # 5. フロントエンド互換の全28スロット完全配列の再構成（空スロットのゼロ埋め）
+    peak_data_dict = {(row["day"], row["hour"]): row for _, row in grouped.iterrows()}
     peak_data = []
 
-    for _, row in grouped.iterrows():
-        peak_data.append({
-            "day": day_map[int(row["day"])],
-            "hour": row["hour"],
-            "volume": int(row["volume"]),
-            "ratio": round(float(row["ratio"]), 4)
-        })
+    for d in range(7):
+        for h in hours_list:
+            if (d, h) in peak_data_dict:
+                r_val = round(float(peak_data_dict[(d, h)]["ratio"]), 4)
+                v_val = int(peak_data_dict[(d, h)]["volume"])
+            else:
+                r_val = 0.0
+                v_val = 0
+            
+            peak_data.append({
+                "day": day_map[d],
+                "hour": h,
+                "volume": v_val,
+                "ratio": r_val
+            })
 
+    return {
+        "factory_id": factory_id,
+        "parts_id": parts_id,
+        "next_week_volume_total": next_week_volume,
+        "peak_info": peak_info,
+        "peak_data": peak_data
+    }
+
+def _fallback_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int, message: str) -> dict:
+    """データ欠損時の 1/28 均等配分フォールバック内部処理"""
+    day_map = {0: "月", 1: "火", 2: "水", 3: "木", 4: "金", 5: "土", 6: "日"}
+    hours_list = ["06:30", "10:00", "15:30", "20:00"]
+    
+    base_val = next_week_volume // 28
+    remainder = next_week_volume % 28
+    
+    peak_data = []
+    count = 0
+    for d in range(7):
+        for h in hours_list:
+            extra = 1 if count < remainder else 0
+            peak_data.append({
+                "day": day_map[d],
+                "hour": h,
+                "volume": base_val + extra,
+                "ratio": round(1 / 28, 4)
+            })
+            count += 1
+            
+    peak_info = {
+        "day": "月",
+        "hour": "06:30",
+        "volume": peak_data[0]["volume"],
+        "message": message
+    }
+    
     return {
         "factory_id": factory_id,
         "parts_id": parts_id,
