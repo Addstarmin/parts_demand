@@ -8,6 +8,7 @@ from prophet import Prophet
 from xgboost import XGBRegressor
 from dotenv import load_dotenv
 
+
 # 各種CSVファイルへのパス定義
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FACTORY_MASTER_PATH = os.path.join(BASE_DIR, "data", "factory_master.csv")

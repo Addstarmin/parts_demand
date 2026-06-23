@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import KpiCard from "../components/KpiCard";
 import ForecastChart from "../components/ForecastChart";
+import AlertPanel from "../components/AlertPanel";
+import ShipmentPeakChart from "../components/ShipmentPeakChart";
 import {
   getFactories,
   getForecast,
   getParts,
   runSimulation,
+  getShipmentPeak,
 } from "../services/api";
 
 function Dashboard() {
@@ -19,6 +22,7 @@ function Dashboard() {
   const [selectedPart, setSelectedPart] = useState("");
 
   const [forecast, setForecast] = useState(null);
+  const [shipmentPeak, setShipmentPeak] = useState(null);
 
   const [simRate, setSimRate] = useState("");
   const [simResult, setSimResult] = useState("");
@@ -64,6 +68,7 @@ function Dashboard() {
         setLoading(true);
         setError("");
         setSimResult("");
+        setShipmentPeak(null);
 
         const data = await getForecast(selectedFactory, selectedPart);
         setForecast(data);
@@ -76,6 +81,7 @@ function Dashboard() {
       } catch (err) {
         setError(err.message);
         setForecast(null);
+        setShipmentPeak(null);
       } finally {
         setLoading(false);
       }
@@ -100,8 +106,6 @@ function Dashboard() {
       setError(err.message);
     }
   };
-
-  const selectedPartInfo = parts.find((part) => part.parts_id === selectedPart);
 
   const renderDashboard = () => (
     <>
@@ -141,6 +145,8 @@ function Dashboard() {
 
       {forecast && (
         <>
+          <AlertPanel forecast={forecast} />
+
           <section className="kpi-grid">
             <KpiCard
               title="発注推奨ステータス"

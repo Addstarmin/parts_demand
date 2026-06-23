@@ -80,3 +80,19 @@ export const runSimulation = async ({ factoryId, partsId, usdJpy }) => {
     message,
   };
 };
+
+export const getShipmentPeak = async (
+  factoryId,
+  partsId,
+  nextWeekVolume
+) => {
+  const response = await fetch(
+    `http://localhost:8000/api/shipment-peak?factory_id=${factoryId}&parts_id=${partsId}&next_week_volume=${nextWeekVolume}`
+  );
+
+  if (!response.ok) {
+    throw new Error("出荷ピーク予測取得失敗");
+  }
+
+  return response.json();
+};
