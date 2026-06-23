@@ -1,0 +1,11 @@
+cmdx-frontend/node_modules
+cmdx-frontend/dist
+
+backend/__pycache__
+backend/.venv
+backend/venv
+
+*.pyc
+.DS_Store
+Thumbs.db
+.vscode
