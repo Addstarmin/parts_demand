@@ -6,6 +6,4 @@ backend/.venv
 backend/venv
 
 *.pyc
-.DS_Store
-Thumbs.db
 .vscode
