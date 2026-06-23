@@ -427,3 +427,59 @@ th {
     align-items: flex-start;
   }
 }
+
+/* =========================
+   F-07 JIT Peak Forecast
+========================= */
+
+.shipment-card {
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 24px;
+  margin-top: 24px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.section-header h2 {
+  margin: 4px 0;
+}
+
+.badge {
+  background: #dbeafe;
+  color: #1e40af;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.peak-summary {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.peak-summary strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.peak-summary p {
+  margin: 4px 0;
+}
+
+.section-label {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}

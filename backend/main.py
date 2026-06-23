@@ -4,11 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import pandas as pd
 
+
 from services.forecast_service import (
     get_factories_list,
     get_parts_list,
     calculate_forecast,
-    run_simulation
+    run_simulation,
+    calculate_jit_peaks
 )
 
 app = FastAPI(title="サプライチェーン需要予測・在庫最適化 API", version="2.0.0")
@@ -107,3 +109,15 @@ def simulate(payload: SimulationRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
+@app.get("/api/shipment-peak")
+def shipment_peak(
+    factory_id: str,
+    parts_id: str,
+    next_week_volume: int = 1758
+):
+    return calculate_jit_peaks(
+        factory_id,
+        parts_id,
+        next_week_volume
+    )

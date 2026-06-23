@@ -2,13 +2,15 @@ import { useEffect, useState } from "react";
 import Sidebar from "../components/Sidebar";
 import KpiCard from "../components/KpiCard";
 import ForecastChart from "../components/ForecastChart";
+import AlertPanel from "../components/AlertPanel";
+import ShipmentPeakChart from "../components/ShipmentPeakChart";
 import {
   getFactories,
   getForecast,
   getParts,
   runSimulation,
+  getShipmentPeak,
 } from "../services/api";
-import AlertPanel from "../components/AlertPanel";
 
 function Dashboard() {
   const [currentPage, setCurrentPage] = useState("dashboard");
@@ -20,6 +22,7 @@ function Dashboard() {
   const [selectedPart, setSelectedPart] = useState("");
 
   const [forecast, setForecast] = useState(null);
+  const [shipmentPeak, setShipmentPeak] = useState(null);
 
   const [simRate, setSimRate] = useState("");
   const [simResult, setSimResult] = useState("");
@@ -65,9 +68,20 @@ function Dashboard() {
         setLoading(true);
         setError("");
         setSimResult("");
+        setShipmentPeak(null);
 
         const data = await getForecast(selectedFactory, selectedPart);
         setForecast(data);
+
+        const peakData = await getShipmentPeak(
+          selectedFactory,
+          selectedPart,
+          data.next_week_forecast
+        );
+        console.log("forecast:", data);
+        console.log("next_week_forecast:", data.next_week_forecast);
+        console.log("peakData:", peakData);
+        setShipmentPeak(peakData);
 
         if (data?.indicators?.usd_jpy) {
           setSimRate(data.indicators.usd_jpy);
@@ -75,6 +89,7 @@ function Dashboard() {
       } catch (err) {
         setError(err.message);
         setForecast(null);
+        setShipmentPeak(null);
       } finally {
         setLoading(false);
       }
@@ -99,8 +114,6 @@ function Dashboard() {
       setError(err.message);
     }
   };
-
-  const selectedPartInfo = parts.find((part) => part.parts_id === selectedPart);
 
   const renderDashboard = () => (
     <>
@@ -141,6 +154,7 @@ function Dashboard() {
       {forecast && (
         <>
           <AlertPanel forecast={forecast} />
+
           <section className="kpi-grid">
             <KpiCard
               title="発注推奨ステータス"
@@ -176,6 +190,13 @@ function Dashboard() {
           </section>
 
           <ForecastChart chartData={forecast.forecast_chart} />
+
+          {shipmentPeak && (
+            <ShipmentPeakChart
+              data={shipmentPeak.peak_data}
+              peakInfo={shipmentPeak.peak_info}
+            />
+          )}
 
           <section className="indicator-grid">
             <div className="info-card">

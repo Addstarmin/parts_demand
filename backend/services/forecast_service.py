@@ -7,6 +7,7 @@ from fredapi import Fred
 from prophet import Prophet
 from xgboost import XGBRegressor
 
+
 # 各種CSVファイルへのパス定義
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FACTORY_MASTER_PATH = os.path.join(BASE_DIR, "data", "factory_master.csv")
@@ -237,4 +238,101 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
         "message": msg,
         "new_forecast": new_forecast,
         "new_recommended_order": new_recommended_order
+    }
+
+def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int):
+    """
+    F-07 JIT出荷ピーク予測
+    """
+
+    df = pd.read_csv("data/jit_shipment_history.csv")
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    target = df[
+        (df["factory_id"] == factory_id)
+        & (df["parts_id"] == parts_id)
+    ]
+
+    if target.empty:
+        return {
+            "peak_info": {
+                "day": "-",
+                "hour": "-",
+                "volume": 0,
+                "message": "実績データが存在しません"
+            },
+            "peak_data": []
+        }
+
+    day_map = {
+        0: "月",
+        1: "火",
+        2: "水",
+        3: "木",
+        4: "金",
+        5: "土",
+        6: "日"
+    }
+
+    target["day"] = target["timestamp"].dt.dayofweek
+    target["hour"] = target["timestamp"].dt.strftime("%H:%M")
+
+    grouped = (
+        target.groupby(["day", "hour"])
+        ["shipment_volume"]
+        .sum()
+        .reset_index()
+    )
+
+    total_volume = grouped["shipment_volume"].sum()
+
+    grouped["ratio"] = (
+        grouped["shipment_volume"] /
+        total_volume
+    )
+
+    grouped["volume"] = (
+        grouped["ratio"] *
+        next_week_volume
+    ).round().astype(int)
+
+    diff = (
+        next_week_volume -
+        grouped["volume"].sum()
+    )
+
+    if diff != 0:
+        idx = grouped["ratio"].idxmax()
+        grouped.loc[idx, "volume"] += diff
+
+    peak_row = grouped.loc[
+        grouped["volume"].idxmax()
+    ]
+
+    peak_info = {
+        "day": day_map[int(peak_row["day"])],
+        "hour": peak_row["hour"],
+        "volume": int(peak_row["volume"]),
+        "message":
+            f"{day_map[int(peak_row['day'])]}曜日 "
+            f"{peak_row['hour']} に最大出荷ピークが予測されます"
+    }
+
+    peak_data = []
+
+    for _, row in grouped.iterrows():
+        peak_data.append({
+            "day": day_map[int(row["day"])],
+            "hour": row["hour"],
+            "volume": int(row["volume"]),
+            "ratio": round(float(row["ratio"]), 4)
+        })
+
+    return {
+        "factory_id": factory_id,
+        "parts_id": parts_id,
+        "next_week_volume_total": next_week_volume,
+        "peak_info": peak_info,
+        "peak_data": peak_data
     }
