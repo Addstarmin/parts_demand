@@ -27,10 +27,10 @@ function ForecastChart({ chartData }) {
     labels,
     datasets: [
       {
-        label: "過去実績",
+        label: "過去実績（需要）",
         data: chartData.map((item) => item.actual),
-        borderColor: "rgba(59, 130, 246, 1)", // ブルー (青)
-        backgroundColor: "rgba(59, 130, 246, 0.1)",
+        borderColor: "#64748b",      // 落ち着いたグレー
+        backgroundColor: "transparent",
         borderWidth: 3,
         tension: 0.35,
         spanGaps: true,
@@ -38,8 +38,8 @@ function ForecastChart({ chartData }) {
       {
         label: "AI需要予測",
         data: chartData.map((item) => item.forecast),
-        borderColor: "rgba(249, 115, 22, 1)", // オレンジ (橙)
-        backgroundColor: "rgba(249, 115, 22, 0.1)",
+        borderColor: "#2563eb",      // 鮮やかなブルー
+        backgroundColor: "transparent",
         borderWidth: 3,
         tension: 0.35,
         spanGaps: true,
@@ -47,16 +47,16 @@ function ForecastChart({ chartData }) {
       {
         label: "現在庫",
         data: chartData.map((item) => item.current_stock),
-        borderColor: "rgba(16, 185, 129, 1)", // グリーン (緑)
+        borderColor: "#10b981",      // グリーン
         backgroundColor: "transparent",
         borderWidth: 2,
         borderDash: [4, 4],
-        pointRadius: 0,
+        pointRadius: 2,
       },
       {
-        label: "安全在庫",
+        label: "安全在庫閾値",
         data: chartData.map((item) => item.safety_stock),
-        borderColor: "rgba(239, 68, 68, 1)", // レッド (赤・警告色)
+        borderColor: "#ef4444",      // 警告のレッド
         backgroundColor: "transparent",
         borderWidth: 2,
         borderDash: [6, 6],
@@ -75,9 +75,7 @@ function ForecastChart({ chartData }) {
         callbacks: {
           label: (context) => {
             const value = context.raw;
-            if (value === null || value === undefined) {
-              return `${context.dataset.label}: データなし`;
-            }
+            if (value === null || value === undefined) return `${context.dataset.label}: データなし`;
             return `${context.dataset.label}: ${Number(value).toLocaleString()}個`;
           },
         },
@@ -95,9 +93,9 @@ function ForecastChart({ chartData }) {
       <div className="section-header">
         <div>
           <p className="section-label">Forecast</p>
-          <h2>需要予測推移</h2>
+          <h2>需要予測・在庫シミュレーション推移</h2>
         </div>
-        <span className="badge">API連携</span>
+        <span className="badge">AI予測モデル連動</span>
       </div>
 
       {chartData.length > 0 ? (
