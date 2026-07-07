@@ -3,6 +3,7 @@ import requests
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from datetime import datetime
 from fredapi import Fred
 from prophet import Prophet
 from xgboost import XGBRegressor
@@ -18,6 +19,25 @@ PARTS_MASTER_PATH = os.path.join(BASE_DIR, "data", "parts_master.csv")
 HISTORY_PATH = os.path.join(BASE_DIR, "data", "internal_performance_history.csv")
 JIT_HISTORY_PATH = os.path.join(BASE_DIR, "data", "jit_shipment_history.csv")
 
+
+def _calculate_dynamic_safety_days(base_days: int, usd_jpy: float, pmi: float, weather_msg: str) -> float:
+    """外部インジケーター（為替・PMI・天候）を評価し、安全在庫日数を動的に変更する"""
+    multiplier = 1.0
+    
+    # 景気が良い（PMI >= 52）なら部品争奪に備えて増量、悪い（<= 48）なら減量
+    if pmi >= 52.0: multiplier += 0.15
+    elif pmi <= 48.0: multiplier -= 0.15
+
+    # 円安（>= 155円）なら海外調達リスクに備えて10%増量
+    if usd_jpy >= 155.0: multiplier += 0.10
+
+    # 悪天候アラートがあれば物流遅延に備えて20%増量
+    if "大雨" in weather_msg or "悪天候" in weather_msg: multiplier += 0.20
+
+    # 最低3日〜最高14日間の範囲に収まるようにガードレールを引く
+    return max(3.0, min(14.0, base_days * multiplier))
+
+
 # =====================================================================
 # 🛠️ 外部APIとダミーデータの切り替え設定フラグ
 # =====================================================================
@@ -27,6 +47,7 @@ USE_DUMMY_DATA = False
 # APIキー設定 (環境変数からのみ取得し、コード内には直接キーを書き込まない)
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+
 
 def load_masters():
     """マスタおよび履歴データのロード共通化"""
@@ -186,6 +207,7 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     train_df['prophet_pred'] = prophet_train_pred
     target_df['prophet_pred'] = prophet_next_pred
     
+    # XGBoostによる最終ハイブリッド予測
     features = ['prophet_pred', 'usd_jpy', 'pmi', 'temperature', 'month', 'week_of_year']
     model_xgb = XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=3, random_state=42)
     model_xgb.fit(train_df[features], train_df['demand'])
@@ -262,7 +284,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
     except Exception:
         pass
 
-    today_pmi = latest_pmi 
+    today_pmi = latest_pmi  
     today_pmi_date = today_str
     if FRED_API_KEY and FRED_API_KEY.strip() != "":
         try:
@@ -275,7 +297,12 @@ def calculate_forecast(factory_id: str, parts_id: str):
         except Exception:
             pass
 
-    safety_stock_vol = int((next_week_demand_pred / 7) * safety_stock_days)
+    # 💡 外部指標を渡して、動的に変化した日数を計算
+    dynamic_safety_days = _calculate_dynamic_safety_days(
+        base_days=safety_stock_days, usd_jpy=latest_fx, pmi=latest_pmi, weather_msg=weather_msg
+    )
+    # 動的な日数をもとに安全在庫の【数量】を計算
+    safety_stock_vol = int((next_week_demand_pred / 7) * dynamic_safety_days)
     recommended_production = max(0, next_week_demand_pred + safety_stock_vol - current_stock)
     recommended_order = recommended_production
     recommended_shipping = next_week_demand_pred
@@ -290,6 +317,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
         risk_level = "WARNING"
         risk_message = f"⚠️【警告】次週の予測需要増に伴い、1〜2週間以内に安全在庫を割り込むリスクがあります。先行増産を推奨します。"
 
+    # チャートデータのシリアライズ配列 (過去2枠分)
     forecast_chart = []
     for _, row in train_df.tail(2).iterrows():
         forecast_chart.append({
@@ -315,6 +343,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
         "parts_name": p_info['parts_name'],
         "current_stock": current_stock,
         "safety_stock": safety_stock_vol,
+        "dynamic_safety_days": round(dynamic_safety_days, 1),  
         "next_week_forecast": next_week_demand_pred,
         "recommended_order": recommended_order,
         "recommended_production": recommended_production,
@@ -354,23 +383,31 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
     base_demand = base_forecast["next_week_forecast"]
     base_fx = base_forecast["indicators"]["usd_jpy"]
     current_stock = base_forecast["current_stock"]
-    safety_stock = base_forecast["safety_stock"]
     
     fx_diff = input_usd_jpy - base_fx
     fx_diff_rate = fx_diff / base_fx
     demand_change_rate = int(fx_diff_rate * 100 * 0.3)
     
     new_forecast = max(100, int(base_demand * (1 + (demand_change_rate / 100))))
-    new_production = max(0, new_forecast + safety_stock - current_stock)
+    
+    simulated_safety_days = _calculate_dynamic_safety_days(
+        base_days=safety_stock_days,
+        usd_jpy=input_usd_jpy,
+        pmi=base_forecast["indicators"]["pmi"],
+        weather_msg=base_forecast["indicators"]["weather_message"]
+    )
+    new_safety = int((new_forecast / 7) * simulated_safety_days)
+    new_recommended_order = max(0, new_forecast + new_safety - current_stock)
     
     trend_msg = "円安トレンド" if fx_diff > 0 else "円高トレンド"
-    msg = f"想定レート 1ドル={input_usd_jpy}円 ({trend_msg}: 基準比 {demand_change_rate:+}%)への変動を検知。マクロ連動予測により、次週需要は【{new_forecast}個】に補正され、推奨生産・発注量は【{new_production}個】へシフトします。"
-    
+    msg = f"想定レート 1ドル={input_usd_jpy}円 ({trend_msg}: 基準比 {demand_change_rate:+}%)への変動を検知。マクロ連動予測により、次週需要は【{new_forecast}個】に補正され、推奨生産・発注量は【{new_recommended_order}個】へシフトします。"
+
     return {
         "demand_change_rate": demand_change_rate,
         "message": msg,
         "new_forecast": new_forecast,
-        "new_recommended_order": new_production
+        "new_recommended_order": new_recommended_order,
+        "simulated_safety_days": round(simulated_safety_days, 1)  
     }
 
 # -----------------------------------------------------------------
