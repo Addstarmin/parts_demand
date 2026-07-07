@@ -336,3 +336,36 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int):
         "peak_info": peak_info,
         "peak_data": peak_data
     }
+
+def load_bom():
+    return pd.read_csv("data/bom_master.csv")
+
+
+def expand_product(product_id, forecast):
+    bom = load_bom()
+
+    target = bom[bom["product_id"] == product_id]
+
+    impacted_parts = []
+    forecast_chart = []
+
+    for _, row in target.iterrows():
+
+        quantity = int(forecast * row["quantity_per_product"])
+
+        impacted_parts.append({
+            "parts_id": row["parts_id"],
+            "quantity": quantity
+        })
+
+        forecast_chart.append({
+            "date": row["parts_id"],
+            "forecast": quantity
+        })
+
+    return {
+        "product_id": product_id,
+        "total_forecast": forecast,
+        "parts": impacted_parts,
+        "forecast_chart": forecast_chart
+    }

@@ -1,0 +1,5 @@
+product_id,parts_id,quantity_per_product
+PROD-A,PT-1002,2
+PROD-A,PT-2005,1
+PROD-B,PT-1002,4
+PROD-B,PT-3001,2

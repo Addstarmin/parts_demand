@@ -10,8 +10,15 @@ from services.forecast_service import (
     get_parts_list,
     calculate_forecast,
     run_simulation,
-    calculate_jit_peaks
+    calculate_jit_peaks,
+    expand_product
 )
+
+from pydantic import BaseModel
+
+class ProductForecastRequest(BaseModel):
+    product_id: str
+    forecast: int
 
 app = FastAPI(title="サプライチェーン需要予測・在庫最適化 API", version="2.0.0")
 
@@ -120,4 +127,11 @@ def shipment_peak(
         factory_id,
         parts_id,
         next_week_volume
+    )
+
+@app.post("/api/product/forecast")
+def product_forecast(req: ProductForecastRequest):
+    return expand_product(
+        req.product_id,
+        req.forecast
     )

@@ -10,20 +10,21 @@ import {
   getParts,
   runSimulation,
   getShipmentPeak,
+  productForecast,
 } from "../services/api";
 
 function Dashboard() {
   const [currentPage, setCurrentPage] = useState("dashboard");
-
   const [factories, setFactories] = useState([]);
   const [parts, setParts] = useState([]);
-
   const [selectedFactory, setSelectedFactory] = useState("");
   const [selectedPart, setSelectedPart] = useState("");
-
+  const [targetType, setTargetType] = useState("part");
+  const [selectedProduct, setSelectedProduct] = useState("PROD-A");
+  const [productParts, setProductParts] = useState([]);
+  const [productForecastData, setProductForecastData] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [shipmentPeak, setShipmentPeak] = useState(null);
-
   const [simRate, setSimRate] = useState("");
   const [simResult, setSimResult] = useState("");
   const [error, setError] = useState("");
@@ -62,9 +63,15 @@ function Dashboard() {
 
   useEffect(() => {
     if (!selectedFactory || !selectedPart) return;
+    if (targetType !== "part") return;
 
     const loadForecast = async () => {
       try {
+        if (targetType !== "part") {
+          setLoading(false);
+        return;
+        }
+
         setLoading(true);
         setError("");
         setSimResult("");
@@ -78,9 +85,7 @@ function Dashboard() {
           selectedPart,
           data.next_week_forecast
         );
-        console.log("forecast:", data);
-        console.log("next_week_forecast:", data.next_week_forecast);
-        console.log("peakData:", peakData);
+
         setShipmentPeak(peakData);
 
         if (data?.indicators?.usd_jpy) {
@@ -96,7 +101,24 @@ function Dashboard() {
     };
 
     loadForecast();
-  }, [selectedFactory, selectedPart]);
+  }, [selectedFactory, selectedPart, targetType]);
+
+　const handleProductForecast = async () => {
+    try {
+      setError("");
+      setProductParts([]);
+      setProductForecastData(null);
+
+      const result = await productForecast(selectedProduct, 100);
+
+      setProductForecastData(result);
+      setProductParts(result.parts);
+
+      console.log("product forecast:", result);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   const handleSimulation = async () => {
     setError("");
@@ -135,23 +157,96 @@ function Dashboard() {
             ))}
           </select>
 
-          <select
-            value={selectedPart}
-            onChange={(e) => setSelectedPart(e.target.value)}
-          >
-            {parts.map((part) => (
-              <option key={part.parts_id} value={part.parts_id}>
-                {part.parts_id} {part.parts_name}
-              </option>
-            ))}
-          </select>
+          <div>
+            <label>
+              <input
+                type="radio"
+                value="part"
+                checked={targetType === "part"}
+                onChange={() => {
+                  setTargetType("part");
+                  setProductParts([]);
+                }}
+              />
+              部品
+            </label>
+
+            <label>
+              <input
+                type="radio"
+                value="product"
+                checked={targetType === "product"}
+                onChange={() => {
+                  setTargetType("product");
+                  setForecast(null);
+                  setShipmentPeak(null);
+                  setProductParts([]);
+                  setProductForecastData(null);
+                  setLoading(false);
+                }}
+              />
+              製品
+            </label>
+          </div>
+
+          {targetType === "part" ? (
+            <select
+              value={selectedPart}
+              onChange={(e) => setSelectedPart(e.target.value)}
+            >
+              {parts.map((part) => (
+                <option key={part.parts_id} value={part.parts_id}>
+                  {part.parts_id} {part.parts_name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <>
+              <select
+                value={selectedProduct}
+                onChange={(e) => setSelectedProduct(e.target.value)}
+              >
+                <option value="PROD-A">PROD-A キャブレターASSY</option>
+                <option value="PROD-B">PROD-B エンジンASSY</option>
+              </select>
+
+              <button onClick={handleProductForecast}>製品を部品展開</button>
+            </>
+          )}
         </div>
       </div>
 
       {loading && <div className="info-message">データ取得中...</div>}
       {error && <div className="error-message">{error}</div>}
 
-      {forecast && (
+      {targetType === "product" && productParts.length > 0 && (
+        <div className="content-card">
+          <h2>製品アセンブリ構成部品</h2>
+          <p>{selectedProduct} を100個生産する場合の必要部品数</p>
+
+          <table>
+            <thead>
+              <tr>
+                <th>部品ID</th>
+                <th>必要数</th>
+              </tr>
+            </thead>
+            <tbody>
+              {productParts.map((item) => (
+                <tr key={item.parts_id}>
+                  <td>{item.parts_id}</td>
+                  <td>{item.quantity}個</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {targetType === "product" && productForecastData && (
+      <ForecastChart chartData={productForecastData.forecast_chart} />
+      )}
+
+      {forecast && targetType === "part" && (
         <>
           <AlertPanel forecast={forecast} />
 

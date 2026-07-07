@@ -96,3 +96,18 @@ export const getShipmentPeak = async (
 
   return response.json();
 };
+
+export const productForecast = async (productId, forecast) => {
+  const response = await fetch(`${API_BASE_URL}/product/forecast`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      product_id: productId,
+      forecast: forecast,
+    }),
+  });
+
+  return handleResponse(response);
+};
