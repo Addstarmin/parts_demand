@@ -18,7 +18,9 @@ ChartJS.register(
   Legend
 );
 
-function ForecastChart({ chartData = [] }) {
+function ForecastChart({ chartData }) {
+  if (!chartData) return null;
+
   const labels = chartData.map((item) => item.date);
 
   const data = {
@@ -28,7 +30,7 @@ function ForecastChart({ chartData = [] }) {
         label: "過去実績（需要）",
         data: chartData.map((item) => item.actual),
         borderColor: "#64748b",      // 落ち着いたグレー
-        backgroundColor: "#64748b",
+        backgroundColor: "transparent",
         borderWidth: 3,
         tension: 0.35,
         spanGaps: true,
@@ -37,7 +39,7 @@ function ForecastChart({ chartData = [] }) {
         label: "AI需要予測",
         data: chartData.map((item) => item.forecast),
         borderColor: "#2563eb",      // 鮮やかなブルー
-        backgroundColor: "#2563eb",
+        backgroundColor: "transparent",
         borderWidth: 3,
         tension: 0.35,
         spanGaps: true,
