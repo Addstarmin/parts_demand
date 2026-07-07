@@ -8,7 +8,6 @@ from prophet import Prophet
 from xgboost import XGBRegressor
 from dotenv import load_dotenv
 
-
 # 各種CSVファイルへのパス定義
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FACTORY_MASTER_PATH = os.path.join(BASE_DIR, "data", "factory_master.csv")
@@ -48,7 +47,7 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     try:
         headers = {'User-Agent': 'sc_demand_forecast_web_api'}
         geo_url = f"https://nominatim.openstreetmap.org/search?q={factory_location}&format=json&limit=1"
-        geo_res = requests.get(geo_url, headers=headers, timeout=3).json()
+        geo_res = requests.get(geo_url, headers=headers, timeout=5).json()
         if geo_res:
             lat = float(geo_res[0]['lat'])
             lon = float(geo_res[0]['lon'])
@@ -84,6 +83,7 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
         pmi_dates = pd.date_range(start=start_date, end=next_week_date, freq='MS')
         df_pmi = pd.DataFrame({'date': pmi_dates, 'pmi': np.random.uniform(48, 53, len(pmi_dates))})
         
+    # 天気予報連携
     weather_message = f"{factory_location}付近の気象に異常なし"
     
     # 💡 予測対象日（next_week_date: 1月5日など）の「1年のうちの何日目か」を取得
@@ -96,8 +96,9 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     try:
         # 今日のリアルタイム予報API（通信が成功した場合は、現在の異常気象アラートのチェックにのみ利用）
         w_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=temperature_2m_max,weather_code&timezone=Asia%2FTokyo"
-        weather_res = requests.get(w_url, timeout=3).json()
+        weather_res = requests.get(w_url, timeout=5).json()
         if 'daily' in weather_res:
+            next_week_temp_pred = np.mean(weather_res['daily']['temperature_2m_max'])
             if max(weather_res['daily']['weather_code']) > 60:
                 weather_message = f"{factory_location}周辺で大雨・悪天候の警戒予報あり"
     except Exception:
@@ -172,7 +173,6 @@ def calculate_forecast(factory_id: str, parts_id: str):
     safety_stock_days = 7 if pd.isna(p_info['safety_stock_days']) else int(p_info['safety_stock_days'])
     current_stock = int(df_selected['ending_stock'].iloc[-1])
     
-    # 👈 【重要修正】_core_engineの戻り値の変数名を latest_fx, latest_pmi に統一
     (
         next_week_demand_pred,
         train_df,
@@ -192,7 +192,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
     # 💡 外部通信ブロック対策：エラー時のデフォルト値を「現在のリアルな値」に設定
     # =================================================================
 
-    # 1. 今日のドル円（エラー時は2026年6月現在のリアルな161.1円を返す）
+    # 1. 今日のドル円
     today_fx = 161.1  
     try:
         fx_url = "https://api.exchangerate-api.com/v4/latest/USD"
@@ -202,9 +202,9 @@ def calculate_forecast(factory_id: str, parts_id: str):
     except Exception:
         pass
 
-    # 2. 今日の気温・天気（エラー時は名古屋の現在のリアルな状態を返す）
-    today_temp = 26.5  # 👈 6月末の名古屋のリアルな気温に修正
-    today_weather = "現在異常なし"  # 👈 ステータスを正常化
+    # 2. 今日の気温・天気
+    today_temp = 26.5  
+    today_weather = "現在異常なし"  
     try:
         w_url = f"https://api.open-meteo.com/v1/forecast?latitude=35.1814&longitude=136.9066&current=temperature_2m,weather_code&timezone=Asia/Tokyo"
         weather_now = requests.get(w_url, timeout=3).json()
@@ -213,7 +213,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
             code = weather_now["current"]["weather_code"]
             today_weather = "現在、大雨警戒" if code >= 60 else "現在異常なし"
     except Exception:
-        pass  # エラー時は上記の26.5℃と「現在異常なし」がそのまま使われます
+        pass
 
     # 3. 今日のPMI
     today_pmi = 51.5 
@@ -243,6 +243,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
         risk_level = "WARNING"
         risk_message = "3週間以内に在庫不足リスクが懸念されます。生産の調整を推奨します"
 
+    # チャートデータのシリアライズ配列
     forecast_chart = []
     for _, row in train_df.tail(2).iterrows():
         forecast_chart.append({
@@ -261,9 +262,6 @@ def calculate_forecast(factory_id: str, parts_id: str):
         "safety_stock": safety_stock_vol
     })
 
-   
-
-    
     return {
         "factory_id": factory_id,
         "factory_name": f_info['factory_name'],
@@ -338,7 +336,7 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = 
         next_week_volume = base_forecast["next_week_forecast"]
 
     if not os.path.exists(JIT_HISTORY_PATH):
-        return _fallback_jit_distribution(factory_id, parts_id, next_week_volume, "実績ファイル未存在")
+        return _fallback_jit_distribution(factory_id, parts_id, next_week_volume, "実績データファイルが存在しません")
 
     try:
         df_jit = pd.read_csv(JIT_HISTORY_PATH)
@@ -349,14 +347,14 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = 
     df_selected = df_jit[(df_jit['factory_id'] == factory_id) & (df_jit['parts_id'] == parts_id)].copy()
 
     if len(df_selected) == 0:
-        return _fallback_jit_distribution(factory_id, parts_id, next_week_volume, "対象部品の実績データなし")
+        return _fallback_jit_distribution(factory_id, parts_id, next_week_volume, "対象部品の実績データが存在しません")
 
     df_selected['day_of_week'] = df_selected['timestamp'].dt.dayofweek
     df_selected['hour_min'] = df_selected['timestamp'].dt.strftime('%H:%M')
 
     total_volume = df_selected['shipment_volume'].sum()
     if total_volume == 0:
-        return _fallback_jit_distribution(factory_id, parts_id, next_week_volume, "総出荷量ゼロ")
+        return _fallback_jit_distribution(factory_id, parts_id, next_week_volume, "集計出荷量が0です。均等配分を適用します")
 
     target_hours = ["06:30", "10:00", "15:30", "20:00"]
     days_mapped = {0: "月", 1: "火", 2: "水", 3: "木", 4: "金", 5: "土", 6: "日"}
@@ -366,6 +364,9 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = 
         for h in target_hours:
             all_slots.append({'day_num': d, 'day': days_mapped[d], 'hour': h, 'actual_volume': 0})
     df_base_slots = pd.DataFrame(all_slots)
+
+    # 指定された4便以外のデータが入っている可能性を考慮し、固定時間帯のみに絞り込む
+    df_selected = df_selected[df_selected['hour_min'].isin(target_hours)]
 
     df_grouped = df_selected.groupby(['day_of_week', 'hour_min'])['shipment_volume'].sum().reset_index()
     df_grouped.columns = ['day_num', 'hour', 'actual_volume']
@@ -389,7 +390,7 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = 
             "day": row['day'],
             "hour": row['hour'],
             "volume": int(row['pred_volume']),
-            "ratio": round(float(row['ratio']), 3)
+            "ratio": round(float(row['ratio']), 4)
         })
 
     max_slot = df_merged.loc[df_merged['pred_volume'].idxmax()]
@@ -402,7 +403,7 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = 
             "day": max_slot['day'],
             "hour": max_slot['hour'],
             "volume": int(max_slot['pred_volume']),
-            "message": f"{max_slot['day']}曜日の{max_slot['hour']}に最大の出荷ピーク（{int(max_slot['pred_volume'])}個）が予測されます。"
+            "message": f"{max_slot['day']}曜日 {max_slot['hour']} に最大出荷ピークが予測されます"
         },
         "peak_data": peak_data
     }
@@ -430,8 +431,6 @@ def _fallback_jit_distribution(factory_id: str, parts_id: str, next_week_volume:
                 "ratio": round(equal_ratio, 4)
             })
 
-    
-    
     return {
         "factory_id": factory_id,
         "parts_id": parts_id,

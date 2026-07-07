@@ -18,7 +18,9 @@ ChartJS.register(
   Legend
 );
 
-function ForecastChart({ chartData = [] }) {
+function ForecastChart({ chartData }) {
+  if (!chartData) return null;
+
   const labels = chartData.map((item) => item.date);
 
   const data = {
@@ -27,6 +29,8 @@ function ForecastChart({ chartData = [] }) {
       {
         label: "過去実績",
         data: chartData.map((item) => item.actual),
+        borderColor: "rgba(59, 130, 246, 1)", // ブルー (青)
+        backgroundColor: "rgba(59, 130, 246, 0.1)",
         borderWidth: 3,
         tension: 0.35,
         spanGaps: true,
@@ -34,6 +38,8 @@ function ForecastChart({ chartData = [] }) {
       {
         label: "AI需要予測",
         data: chartData.map((item) => item.forecast),
+        borderColor: "rgba(249, 115, 22, 1)", // オレンジ (橙)
+        backgroundColor: "rgba(249, 115, 22, 0.1)",
         borderWidth: 3,
         tension: 0.35,
         spanGaps: true,
@@ -41,6 +47,8 @@ function ForecastChart({ chartData = [] }) {
       {
         label: "現在庫",
         data: chartData.map((item) => item.current_stock),
+        borderColor: "rgba(16, 185, 129, 1)", // グリーン (緑)
+        backgroundColor: "transparent",
         borderWidth: 2,
         borderDash: [4, 4],
         pointRadius: 0,
@@ -48,6 +56,8 @@ function ForecastChart({ chartData = [] }) {
       {
         label: "安全在庫",
         data: chartData.map((item) => item.safety_stock),
+        borderColor: "rgba(239, 68, 68, 1)", // レッド (赤・警告色)
+        backgroundColor: "transparent",
         borderWidth: 2,
         borderDash: [6, 6],
         pointRadius: 0,
