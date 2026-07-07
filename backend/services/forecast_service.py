@@ -114,11 +114,9 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     target_day_of_year = next_week_date.dayofyear
     
     # 💡 予測対象日の日付に基づいて、日本の四季のサインカーブから気温を動的に自動計算
-    # これにより、1月なら自動で約5〜7℃、8月なら自動で約27℃が算出され、AIモデルに正しく渡ります
     next_week_temp_pred = 16.0 + 11.0 * np.sin(2 * np.pi * (target_day_of_year - 105) / 365)
     
     try:
-        # 今日のリアルタイム予報API（通信が成功した場合は、現在の異常気象アラートのチェックにのみ利用）
         w_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=temperature_2m_max,weather_code&timezone=Asia%2FTokyo"
         weather_res = requests.get(w_url, timeout=3).json()
         if 'daily' in weather_res:
@@ -127,7 +125,6 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     except Exception:
         pass
 
-    # 💡 1年を通じて「最低5℃ 〜 最高27℃」の範囲で、1月が一番寒くなるように位相をずらした計算式
     df_selected['temperature'] = 16 + 11 * np.sin(2 * np.pi * (df_selected['date'].dt.dayofyear - 105) / 365)
     df_fx_weekly = df_fx.groupby(pd.Grouper(key='date', freq='W-MON')).mean().reset_index()
     
@@ -291,7 +288,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
         "parts_name": p_info['parts_name'],
         "current_stock": current_stock,
         "safety_stock": safety_stock_vol,
-        "dynamic_safety_days": round(dynamic_safety_days, 1),  # 💡 フロントエンド配慮で追加
+        "dynamic_safety_days": round(dynamic_safety_days, 1),  
         "next_week_forecast": next_week_demand_pred,
         "recommended_order": recommended_order,
         "recommended_production": recommended_production,
@@ -337,7 +334,6 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
     
     new_forecast = max(100, int(base_demand * (1 + (demand_change_rate / 100))))
     
-    # 💡 シミュレーションされたドル円値に連動して、安全在庫日数も変化させる
     simulated_safety_days = _calculate_dynamic_safety_days(
         base_days=safety_stock_days,
         usd_jpy=input_usd_jpy,
@@ -356,7 +352,7 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
         "message": msg,
         "new_forecast": new_forecast,
         "new_recommended_order": new_recommended_order,
-        "simulated_safety_days": round(simulated_safety_days, 1)  # 💡 シミュレーション結果にも追加
+        "simulated_safety_days": round(simulated_safety_days, 1)  
     }
 
 def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = None) -> dict:
