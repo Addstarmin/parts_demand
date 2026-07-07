@@ -18,15 +18,19 @@ ChartJS.register(
   Legend
 );
 
-function ForecastChart({ chartData = [] }) {
+function ForecastChart({ chartData }) {
+  if (!chartData) return null;
+
   const labels = chartData.map((item) => item.date);
 
   const data = {
     labels,
     datasets: [
       {
-        label: "過去実績",
+        label: "過去実績（需要）",
         data: chartData.map((item) => item.actual),
+        borderColor: "#64748b",      // 落ち着いたグレー
+        backgroundColor: "transparent",
         borderWidth: 3,
         tension: 0.35,
         spanGaps: true,
@@ -34,6 +38,8 @@ function ForecastChart({ chartData = [] }) {
       {
         label: "AI需要予測",
         data: chartData.map((item) => item.forecast),
+        borderColor: "#2563eb",      // 鮮やかなブルー
+        backgroundColor: "transparent",
         borderWidth: 3,
         tension: 0.35,
         spanGaps: true,
@@ -41,13 +47,17 @@ function ForecastChart({ chartData = [] }) {
       {
         label: "現在庫",
         data: chartData.map((item) => item.current_stock),
+        borderColor: "#10b981",      // グリーン
+        backgroundColor: "transparent",
         borderWidth: 2,
         borderDash: [4, 4],
-        pointRadius: 0,
+        pointRadius: 2,
       },
       {
-        label: "安全在庫",
+        label: "安全在庫閾値",
         data: chartData.map((item) => item.safety_stock),
+        borderColor: "#ef4444",      // 警告のレッド
+        backgroundColor: "transparent",
         borderWidth: 2,
         borderDash: [6, 6],
         pointRadius: 0,
@@ -65,9 +75,7 @@ function ForecastChart({ chartData = [] }) {
         callbacks: {
           label: (context) => {
             const value = context.raw;
-            if (value === null || value === undefined) {
-              return `${context.dataset.label}: データなし`;
-            }
+            if (value === null || value === undefined) return `${context.dataset.label}: データなし`;
             return `${context.dataset.label}: ${Number(value).toLocaleString()}個`;
           },
         },
@@ -85,9 +93,9 @@ function ForecastChart({ chartData = [] }) {
       <div className="section-header">
         <div>
           <p className="section-label">Forecast</p>
-          <h2>需要予測推移</h2>
+          <h2>需要予測・在庫シミュレーション推移</h2>
         </div>
-        <span className="badge">API連携</span>
+        <span className="badge">AI予測モデル連動</span>
       </div>
 
       {chartData.length > 0 ? (
