@@ -8,7 +8,6 @@ from prophet import Prophet
 from xgboost import XGBRegressor
 from dotenv import load_dotenv
 
-
 # 各種CSVファイルへのパス定義
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FACTORY_MASTER_PATH = os.path.join(BASE_DIR, "data", "factory_master.csv")
@@ -16,6 +15,12 @@ PARTS_MASTER_PATH = os.path.join(BASE_DIR, "data", "parts_master.csv")
 HISTORY_PATH = os.path.join(BASE_DIR, "data", "internal_performance_history.csv")
 JIT_HISTORY_PATH = os.path.join(BASE_DIR, "data", "jit_shipment_history.csv")
 
+
+# =====================================================================
+# 🛠️ 外部APIとダミーデータの切り替え設定フラグ
+# =====================================================================
+# True にすると外部APIを叩かず、高速な内部ダミー自動生成ロジックに切り替わります。
+USE_DUMMY_DATA = False  
 
 def _calculate_dynamic_safety_days(base_days: int, usd_jpy: float, pmi: float, weather_msg: str) -> float:
     """外部インジケーター（為替・PMI・天候）を評価し、安全在庫日数を動的に変更する"""
@@ -37,6 +42,7 @@ def _calculate_dynamic_safety_days(base_days: int, usd_jpy: float, pmi: float, w
 # .envファイルを読み込む
 load_dotenv()
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+
 
 def load_masters():
     df_f = pd.read_csv(FACTORY_MASTER_PATH)
@@ -205,7 +211,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
     today_now = pd.Timestamp.now()
     today_str = today_now.strftime("%Y-%m-%d")
     
-    # 1. 今日のドル円
+    # 💡 外部通信ブロック対策：エラー時のデフォルト値を「現在のリアルな値」に設定
     today_fx = 161.1  
     try:
         fx_url = "https://api.exchangerate-api.com/v4/latest/USD"
@@ -228,7 +234,6 @@ def calculate_forecast(factory_id: str, parts_id: str):
     except Exception:
         pass  
 
-    # 3. 今日のPMI
     today_pmi = 51.5 
     today_pmi_date = today_str
     if FRED_API_KEY and FRED_API_KEY.strip() != "":
@@ -330,7 +335,7 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
     fx_diff_rate = (input_usd_jpy - base_fx) / base_fx
     demand_change_rate = int(fx_diff_rate * 100 * 0.3)
     
-    new_forecast = max(0, int(base_demand * (1 + (demand_change_rate / 100))))
+    new_forecast = max(100, int(base_demand * (1 + (demand_change_rate / 100))))
     
     # 💡 シミュレーションされたドル円値に連動して、安全在庫日数も変化させる
     simulated_safety_days = _calculate_dynamic_safety_days(
@@ -342,9 +347,9 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
     new_safety = int((new_forecast / 7) * simulated_safety_days)
     new_recommended_order = max(0, new_forecast + new_safety - current_stock)
     
-    msg = f"為替が1ドル={input_usd_jpy}円へ変動した場合、需要は通常予測から約{demand_change_rate}%増加（または減少）するとシミュレートされます。"
-    if demand_change_rate > 0:
-        msg = f"ドル高トレンド（+{demand_change_rate}%）に伴い、部品調達および出荷需要が増加する見込みです。"
+    fx_diff = input_usd_jpy - base_fx
+    trend_msg = "円安トレンド" if fx_diff > 0 else "円高トレンド"
+    msg = f"想定レート 1ドル={input_usd_jpy}円 ({trend_msg}: 基準比 {demand_change_rate:+}%)への変動を検知。マクロ連動予測により、次週需要は【{new_forecast}個】に補正され、推奨生産・発注量は【{new_recommended_order}個】へシフトします。"
 
     return {
         "demand_change_rate": demand_change_rate,
