@@ -16,6 +16,24 @@ PARTS_MASTER_PATH = os.path.join(BASE_DIR, "data", "parts_master.csv")
 HISTORY_PATH = os.path.join(BASE_DIR, "data", "internal_performance_history.csv")
 JIT_HISTORY_PATH = os.path.join(BASE_DIR, "data", "jit_shipment_history.csv")
 
+
+def _calculate_dynamic_safety_days(base_days: int, usd_jpy: float, pmi: float, weather_msg: str) -> float:
+    """外部インジケーター（為替・PMI・天候）を評価し、安全在庫日数を動的に変更する"""
+    multiplier = 1.0
+    
+    # 景気が良い（PMI >= 52）なら部品争奪に備えて増量、悪い（<= 48）なら減量
+    if pmi >= 52.0: multiplier += 0.15
+    elif pmi <= 48.0: multiplier -= 0.15
+
+    # 円安（>= 155円）なら海外調達リスクに備えて10%増量
+    if usd_jpy >= 155.0: multiplier += 0.10
+
+    # 悪天候アラートがあれば物流遅延に備えて20%増量
+    if "大雨" in weather_msg or "悪天候" in weather_msg: multiplier += 0.20
+
+    # 最低3日〜最高14日間の範囲に収まるようにガードレールを引く
+    return max(3.0, min(14.0, base_days * multiplier))
+
 # .envファイルを読み込む
 load_dotenv()
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
@@ -172,7 +190,6 @@ def calculate_forecast(factory_id: str, parts_id: str):
     safety_stock_days = 7 if pd.isna(p_info['safety_stock_days']) else int(p_info['safety_stock_days'])
     current_stock = int(df_selected['ending_stock'].iloc[-1])
     
-    # 👈 【重要修正】_core_engineの戻り値の変数名を latest_fx, latest_pmi に統一
     (
         next_week_demand_pred,
         train_df,
@@ -188,11 +205,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
     today_now = pd.Timestamp.now()
     today_str = today_now.strftime("%Y-%m-%d")
     
-    # =================================================================
-    # 💡 外部通信ブロック対策：エラー時のデフォルト値を「現在のリアルな値」に設定
-    # =================================================================
-
-    # 1. 今日のドル円（エラー時は2026年6月現在のリアルな161.1円を返す）
+    # 1. 今日のドル円
     today_fx = 161.1  
     try:
         fx_url = "https://api.exchangerate-api.com/v4/latest/USD"
@@ -202,9 +215,9 @@ def calculate_forecast(factory_id: str, parts_id: str):
     except Exception:
         pass
 
-    # 2. 今日の気温・天気（エラー時は名古屋の現在のリアルな状態を返す）
-    today_temp = 26.5  # 👈 6月末の名古屋のリアルな気温に修正
-    today_weather = "現在異常なし"  # 👈 ステータスを正常化
+    # 2. 今日の気温・天気
+    today_temp = 26.5  
+    today_weather = "現在異常なし"  
     try:
         w_url = f"https://api.open-meteo.com/v1/forecast?latitude=35.1814&longitude=136.9066&current=temperature_2m,weather_code&timezone=Asia/Tokyo"
         weather_now = requests.get(w_url, timeout=3).json()
@@ -213,7 +226,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
             code = weather_now["current"]["weather_code"]
             today_weather = "現在、大雨警戒" if code >= 60 else "現在異常なし"
     except Exception:
-        pass  # エラー時は上記の26.5℃と「現在異常なし」がそのまま使われます
+        pass  
 
     # 3. 今日のPMI
     today_pmi = 51.5 
@@ -229,7 +242,12 @@ def calculate_forecast(factory_id: str, parts_id: str):
         except Exception:
             pass
 
-    safety_stock_vol = int((next_week_demand_pred / 7) * safety_stock_days)
+    # 💡 外部指標を渡して、動的に変化した日数を計算
+    dynamic_safety_days = _calculate_dynamic_safety_days(
+        base_days=safety_stock_days, usd_jpy=latest_fx, pmi=latest_pmi, weather_msg=weather_msg
+    )
+    # 動的な日数をもとに安全在庫の【数量】を計算
+    safety_stock_vol = int((next_week_demand_pred / 7) * dynamic_safety_days)
     recommended_production = max(0, next_week_demand_pred + safety_stock_vol - current_stock)
     recommended_order = recommended_production
     recommended_shipping = next_week_demand_pred
@@ -261,9 +279,6 @@ def calculate_forecast(factory_id: str, parts_id: str):
         "safety_stock": safety_stock_vol
     })
 
-   
-
-    
     return {
         "factory_id": factory_id,
         "factory_name": f_info['factory_name'],
@@ -271,6 +286,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
         "parts_name": p_info['parts_name'],
         "current_stock": current_stock,
         "safety_stock": safety_stock_vol,
+        "dynamic_safety_days": round(dynamic_safety_days, 1),  # 💡 フロントエンド配慮で追加
         "next_week_forecast": next_week_demand_pred,
         "recommended_order": recommended_order,
         "recommended_production": recommended_production,
@@ -315,7 +331,15 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
     demand_change_rate = int(fx_diff_rate * 100 * 0.3)
     
     new_forecast = max(0, int(base_demand * (1 + (demand_change_rate / 100))))
-    new_safety = int((new_forecast / 7) * safety_stock_days)
+    
+    # 💡 シミュレーションされたドル円値に連動して、安全在庫日数も変化させる
+    simulated_safety_days = _calculate_dynamic_safety_days(
+        base_days=safety_stock_days,
+        usd_jpy=input_usd_jpy,
+        pmi=base_forecast["indicators"]["pmi"],
+        weather_msg=base_forecast["indicators"]["weather_message"]
+    )
+    new_safety = int((new_forecast / 7) * simulated_safety_days)
     new_recommended_order = max(0, new_forecast + new_safety - current_stock)
     
     msg = f"為替が1ドル={input_usd_jpy}円へ変動した場合、需要は通常予測から約{demand_change_rate}%増加（または減少）するとシミュレートされます。"
@@ -326,7 +350,8 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
         "demand_change_rate": demand_change_rate,
         "message": msg,
         "new_forecast": new_forecast,
-        "new_recommended_order": new_recommended_order
+        "new_recommended_order": new_recommended_order,
+        "simulated_safety_days": round(simulated_safety_days, 1)  # 💡 シミュレーション結果にも追加
     }
 
 def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = None) -> dict:
@@ -430,8 +455,6 @@ def _fallback_jit_distribution(factory_id: str, parts_id: str, next_week_volume:
                 "ratio": round(equal_ratio, 4)
             })
 
-    
-    
     return {
         "factory_id": factory_id,
         "parts_id": parts_id,
