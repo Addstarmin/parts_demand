@@ -18,6 +18,9 @@ from services.forecast_service import (
 
 app = FastAPI(title="サプライチェーン需要予測・在庫最適化 API", version="2.0.0")
 
+# =====================================================================
+# CORS設定 (Reactデフォルトの開発環境ポート: 5173 からのアクセスを許可)
+# =====================================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,8 +29,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# IDの表記揺れを補正する共通ヘルパー関数
+def normalize_id(id_str: str) -> str:
+    if not id_str:
+        return id_str
+    id_clean = id_str.replace("-", "").strip().upper()
+    
+    # F001やF01などを F-01 へ正規化
+    if id_clean.startswith("F"):
+        try:
+            num = int(id_clean[1:])
+            return f"F-{num:02d}"
+        except ValueError:
+            pass
+            
+    # PT1002などを PT-1002 へ正規化
+    if id_clean.startswith("PT"):
+        try:
+            num = int(id_clean[2:])
+            return f"PT-{num}"
+        except ValueError:
+            pass
+            
+    return id_str
+
+# シミュレーションAPI用のリクエストバリデーションスキーマ
 class SimulationRequest(BaseModel):
-    factory_id: str = Field(..., example="F001")
+    factory_id: str = Field(..., example="F-01")
     parts_id: str = Field(..., example="PT-1002")
     usd_jpy: float = Field(..., example=158.0)
 
@@ -41,7 +69,6 @@ def get_current_indicators():
     フロントエンドの「本日の指標」カードが直接読み込めるように
     リアルタイムの為替・PMI・気象データを返すエンドポイント
     """
-
 
     today_now = pd.Timestamp.now()
     today_str = today_now.strftime("%Y-%m-%d")
@@ -140,16 +167,20 @@ def get_forecast(
     factory_id: str = Query(..., description="工場ID"),
     parts_id: str = Query(..., description="部品ID")
 ):
+    # IDの表記揺れを正規化 (F001 -> F-01 等)
+    norm_factory_id = normalize_id(factory_id)
+    norm_parts_id = normalize_id(parts_id)
+
     factories = [f["factory_id"] for f in get_factories_list()]
     parts = [p["parts_id"] for p in get_parts_list()]
     
-    if factory_id not in factories:
-        raise HTTPException(status_code=400, detail="指定された工場IDが存在しません")
-    if parts_id not in parts:
-        raise HTTPException(status_code=400, detail="指定された部品IDが存在しません")
+    if norm_factory_id not in factories:
+        raise HTTPException(status_code=400, detail=f"指定された工場IDが存在しません (入力: {factory_id} -> 正規化: {norm_factory_id})")
+    if norm_parts_id not in parts:
+        raise HTTPException(status_code=400, detail=f"指定された部品IDが存在しません (入力: {parts_id} -> 正規化: {norm_parts_id})")
         
     try:
-        result = calculate_forecast(factory_id, parts_id)
+        result = calculate_forecast(norm_factory_id, norm_parts_id)
         if result is None:
             raise HTTPException(status_code=400, detail="選択された工場・部品の実績データが存在しません")
         return result
@@ -168,16 +199,19 @@ def simulate(payload: SimulationRequest):
     if payload.usd_jpy >= 500:
         raise HTTPException(status_code=400, detail="ドル円レートの入力値が異常です (500未満にしてください)")
         
+    norm_factory_id = normalize_id(payload.factory_id)
+    norm_parts_id = normalize_id(payload.parts_id)
+
     factories = [f["factory_id"] for f in get_factories_list()]
     parts = [p["parts_id"] for p in get_parts_list()]
     
-    if payload.factory_id not in factories:
-        raise HTTPException(status_code=400, detail="factory_id が存在しない場合はエラー")
-    if payload.parts_id not in parts:
-        raise HTTPException(status_code=400, detail="parts_id が存在しない場合はエラー")
+    if norm_factory_id not in factories:
+        raise HTTPException(status_code=400, detail=f"指定された factory_id が存在しません (入力: {payload.factory_id} -> 正規化: {norm_factory_id})")
+    if norm_parts_id not in parts:
+        raise HTTPException(status_code=400, detail=f"指定された parts_id が存在しません (入力: {payload.parts_id} -> 正規化: {norm_parts_id})")
         
     try:
-        result = run_simulation(payload.factory_id, payload.parts_id, payload.usd_jpy)
+        result = run_simulation(norm_factory_id, norm_parts_id, payload.usd_jpy)
         if result is None:
             raise HTTPException(status_code=400, detail="選択された工場・部品の実績データが存在しません")
         return result
@@ -185,16 +219,30 @@ def simulate(payload: SimulationRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 # =====================================================================
-# 5. 出荷ピーク取得API
+# 5. F-07 JIT出荷ピーク予測取得API
 # =====================================================================
 @app.get("/api/shipment-peak")
 def shipment_peak(
     factory_id: str = Query(..., description="工場ID"),
     parts_id: str = Query(..., description="部品ID"),
-    next_week_volume: int = Query(1758, description="来週の物量")
+    next_week_volume: int = Query(1758, description="次週の予測出荷総数")
 ):
+    # IDの表記揺れを正規化
+    norm_factory_id = normalize_id(factory_id)
+    norm_parts_id = normalize_id(parts_id)
+
+    factories = [f["factory_id"] for f in get_factories_list()]
+    parts = [p["parts_id"] for p in get_parts_list()]
+    
+    if norm_factory_id not in factories:
+        raise HTTPException(status_code=400, detail=f"指定された工場IDが存在しません (入力: {factory_id} -> 正規化: {norm_factory_id})")
+    if norm_parts_id not in parts:
+        raise HTTPException(status_code=400, detail=f"指定された部品IDが存在しません (入力: {parts_id} -> 正規化: {norm_parts_id})")
+    if next_week_volume < 0:
+        raise HTTPException(status_code=400, detail="予測出荷数は0以上の整数値を指定してください")
+
     try:
-        return calculate_jit_peaks(factory_id, parts_id, next_week_volume)
+        return calculate_jit_peaks(norm_factory_id, norm_parts_id, next_week_volume)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

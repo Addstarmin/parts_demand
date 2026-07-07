@@ -14,70 +14,71 @@ import {
 
 function Dashboard() {
   const [currentPage, setCurrentPage] = useState("dashboard");
-
   const [factories, setFactories] = useState([]);
   const [parts, setParts] = useState([]);
-
   const [selectedFactory, setSelectedFactory] = useState("");
   const [selectedPart, setSelectedPart] = useState("");
-
   const [forecast, setForecast] = useState(null);
   const [shipmentPeak, setShipmentPeak] = useState(null);
-
   const [simRate, setSimRate] = useState("");
   const [simResult, setSimResult] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // 初回マスタ読み込み
   useEffect(() => {
     const initData = async () => {
       try {
         setLoading(true);
         setError("");
-
         const [factoryData, partsData] = await Promise.all([
           getFactories(),
           getParts(),
         ]);
-
         setFactories(factoryData);
         setParts(partsData);
 
-        if (factoryData.length > 0) {
-          setSelectedFactory(factoryData[0].factory_id);
-        }
-
-        if (partsData.length > 0) {
-          setSelectedPart(partsData[0].parts_id);
-        }
+        if (factoryData.length > 0) setSelectedFactory(factoryData[0].factory_id);
+        if (partsData.length > 0) setSelectedPart(partsData[0].parts_id);
       } catch (err) {
         setError(err.message);
       } finally {
         setLoading(false);
       }
     };
-
     initData();
   }, []);
 
+  // 工場・部品変更時の需要予測およびJIT出荷ピークの並行取得 (IT-01 連携対応)
   useEffect(() => {
     if (!selectedFactory || !selectedPart) return;
 
-    const loadForecast = async () => {
+    const loadForecastAndPeaks = async () => {
       try {
         setLoading(true);
         setError("");
         setSimResult("");
         setShipmentPeak(null);
 
-        const data = await getForecast(selectedFactory, selectedPart);
-        setForecast(data);
+        // 1. 基本需要予測データをフェッチ
+        const forecastData = await getForecast(selectedFactory, selectedPart);
+        setForecast(forecastData);
 
-        if (data?.current_indicators?.usd_jpy) {
-          setSimRate(data.current_indicators.usd_jpy);
-        } else if (data?.indicators?.usd_jpy) {
-          setSimRate(data.indicators.usd_jpy);
+        // 為替レートの初期初期設定（本日のリアルタイム値を優先、なければ予測前提値）
+        if (forecastData?.current_indicators?.usd_jpy) {
+          setSimRate(forecastData.current_indicators.usd_jpy);
+        } else if (forecastData?.indicators?.usd_jpy) {
+          setSimRate(forecastData.indicators.usd_jpy);
         }
+
+        // 2. 予測ボリュームに基づきJIT出荷ピーク予測を取得
+        const peakData = await getShipmentPeak(
+          selectedFactory,
+          selectedPart,
+          forecastData.next_week_forecast
+        );
+        setShipmentPeak(peakData);
+
       } catch (err) {
         setError(err.message);
         setForecast(null);
@@ -87,23 +88,44 @@ function Dashboard() {
       }
     };
 
-    loadForecast();
+    loadForecastAndPeaks();
   }, [selectedFactory, selectedPart]);
 
+  // 為替シミュレーション再計算処理のハンドリング拡張 (IT-01)
   const handleSimulation = async () => {
     setError("");
     setSimResult("");
+    if (!forecast) return;
 
     try {
+      setLoading(true);
       const result = await runSimulation({
         factoryId: selectedFactory,
         partsId: selectedPart,
         usdJpy: simRate,
       });
-
       setSimResult(result.message);
+
+      // シミュレーション結果により動的スケーリングされた次週需要 (new_forecast) でJITピークも再計算
+      if (result.new_forecast !== undefined) {
+        const updatedPeakData = await getShipmentPeak(
+          selectedFactory,
+          selectedPart,
+          result.new_forecast
+        );
+        setShipmentPeak(updatedPeakData);
+        
+        // 既存UIの予測整合性を保つため部分的なステート同期
+        setForecast((prev) => ({
+          ...prev,
+          next_week_forecast: result.new_forecast,
+          recommended_order: result.new_recommended_order,
+        }));
+      }
     } catch (err) {
       setError(err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -140,48 +162,51 @@ function Dashboard() {
         </div>
       </div>
 
-      {loading && <div className="info-message">データ取得中...</div>}
+      {loading && <div className="info-message">データ同期中...</div>}
       {error && <div className="error-message">{error}</div>}
 
       {forecast && (
         <>
           <AlertPanel forecast={forecast} />
 
+          {/* KPI表示エリア：すべての予測項目（4つ）を過不足なく統合表示 */}
           <section className="kpi-grid">
             <KpiCard
-              title="発注推奨ステータス"
-              value={forecast.risk_level}
-              subText={forecast.risk_message}
-              type={
-                forecast.risk_level === "CRITICAL"
-                  ? "danger"
-                  : forecast.risk_level === "WARNING"
-                  ? "warning"
-                  : "normal"
-              }
+              title="① 次週 需要予測"
+              value={`${forecast.next_week_forecast.toLocaleString()} 個`}
+              subText="マクロ環境連動AI予測値"
             />
 
             <KpiCard
-              title="現在庫"
-              value={`${forecast.current_stock.toLocaleString()}個`}
-              subText={`安全在庫：${forecast.safety_stock.toLocaleString()}個`}
-            />
-
-            <KpiCard
-              title="次週需要予測"
-              value={`${forecast.next_week_forecast.toLocaleString()}個`}
-              subText="AI予測値"
-            />
-
-            <KpiCard
-              title="推奨発注量"
-              value={`${forecast.recommended_order.toLocaleString()}個`}
-              subText="今週中の発注を推奨"
+              title="② 推奨発注量"
+              value={`${forecast.recommended_order.toLocaleString()} 個`}
+              subText="調達・サプライヤへの推奨手配量"
               type="warning"
+            />
+
+            <KpiCard
+              title="③ 推奨生産指示量"
+              value={`${forecast.recommended_production.toLocaleString()} 個`}
+              subText="安全在庫維持に必要な製造ライン枠"
+              type={forecast.recommended_production > 0 ? "warning" : "normal"}
+            />
+
+            <KpiCard
+              title="④ 推奨出荷・引取枠"
+              value={`${forecast.recommended_shipping.toLocaleString()} 個`}
+              subText="次週JIT要求に基づく総出荷量"
             />
           </section>
 
           <ForecastChart chartData={forecast.forecast_chart} />
+
+          {/* F-07 JIT出荷ピーク予測積層チャートコンポーネントをレイアウト構造を維持して埋め込み */}
+          {shipmentPeak && (
+            <ShipmentPeakChart
+              data={shipmentPeak.peak_data}
+              peakInfo={shipmentPeak.peak_info}
+            />
+          )}
 
           {/* 🌟 修正ポイント：インジケーターを「過去の予測前提」と「本日」の計6つに拡張 */}
           <h3 style={{ margin: "20px 0 10px 0", color: "#4A5568" }}>外部経済指標・環境データ（全6項目）</h3>
@@ -247,16 +272,9 @@ function Dashboard() {
     <div className="content-card">
       <p className="section-label">Detail</p>
       <h2>詳細分析</h2>
-
       {forecast ? (
         <>
-          <p>
-            選択中の部品：
-            <strong>
-              {forecast.parts_id} {forecast.parts_name}
-            </strong>
-          </p>
-
+          <p>選択中の部品：<strong>{forecast.parts_id} {forecast.parts_name}</strong></p>
           <div className="detail-grid">
             <div>
               <h3>需要変動の要因</h3>
@@ -267,12 +285,11 @@ function Dashboard() {
               <h4 style={{ margin: "10px 0 5px 0", color: "#2f855a" }}>【本日リアルタイム値】</h4>
               <p>ドル円：{forecast.current_indicators?.usd_jpy}円 / PMI：{forecast.current_indicators?.pmi} / 気温：{forecast.current_indicators?.temperature}℃</p>
             </div>
-
             <div>
-              <h3>リスク判定</h3>
+              <h3>リスクアセスメント</h3>
               <p>{forecast.risk_message}</p>
-              <p>現在庫：{forecast.current_stock.toLocaleString()}個</p>
-              <p>安全在庫：{forecast.safety_stock.toLocaleString()}個</p>
+              <p>現在庫：{forecast.current_stock.toLocaleString()} 個</p>
+              <p>安全在庫目標：{forecast.safety_stock.toLocaleString()} 個</p>
             </div>
           </div>
         </>
@@ -285,8 +302,7 @@ function Dashboard() {
   const renderParts = () => (
     <div className="content-card">
       <p className="section-label">Parts</p>
-      <h2>部品情報</h2>
-
+      <h2>部品情報マスタ</h2>
       <table>
         <thead>
           <tr>
@@ -301,8 +317,8 @@ function Dashboard() {
             <tr key={part.parts_id}>
               <td>{part.parts_id}</td>
               <td>{part.parts_name}</td>
-              <td>{part.lead_time_weeks}週</td>
-              <td>{part.safety_stock_days}日</td>
+              <td>{part.lead_time_weeks} Wi</td>
+              <td>{part.safety_stock_days} 日</td>
             </tr>
           ))}
         </tbody>
@@ -313,14 +329,12 @@ function Dashboard() {
   const renderSimulation = () => (
     <div className="content-card">
       <p className="section-label">Simulation</p>
-      <h2>為替シミュレーション</h2>
-
+      <h2>為替連動 需要感度シミュレーション</h2>
       {forecast ? (
         <div className="simulation-box">
-          <label>対象工場</label>
+          <label>対象工場拠点</label>
           <input value={forecast.factory_name} disabled />
-
-          <label>対象部品</label>
+          <label>対象構成部品</label>
           <input value={`${forecast.parts_id} ${forecast.parts_name}`} disabled />
 
           <label>現在のリアルタイム為替レート</label>
@@ -332,14 +346,12 @@ function Dashboard() {
             value={simRate}
             onChange={(e) => setSimRate(e.target.value)}
           />
-
-          <button onClick={handleSimulation}>予測を再計算する</button>
-
+          <button onClick={handleSimulation}>感度シミュレーション再計算</button>
           {simResult && <div className="success-message">{simResult}</div>}
           {error && <div className="error-message">{error}</div>}
         </div>
       ) : (
-        <p>先にダッシュボードでデータを取得してください。</p>
+        <p>ダッシュボード画面から対象データを選択してください。</p>
       )}
     </div>
   );
@@ -347,8 +359,8 @@ function Dashboard() {
   const renderSettings = () => (
     <div className="content-card">
       <p className="section-label">Settings</p>
-      <h2>設定</h2>
-      <p>API接続先：localhost:8000</p>
+      <h2>システム環境設定</h2>
+      <p>APIゲートウェイエンドポイント：http://localhost:8000/api</p>
     </div>
   );
 
@@ -358,7 +370,6 @@ function Dashboard() {
     if (currentPage === "parts") return renderParts();
     if (currentPage === "simulation") return renderSimulation();
     if (currentPage === "settings") return renderSettings();
-
     return renderDashboard();
   };
 

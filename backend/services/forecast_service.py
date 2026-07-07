@@ -19,11 +19,6 @@ PARTS_MASTER_PATH = os.path.join(BASE_DIR, "data", "parts_master.csv")
 HISTORY_PATH = os.path.join(BASE_DIR, "data", "internal_performance_history.csv")
 JIT_HISTORY_PATH = os.path.join(BASE_DIR, "data", "jit_shipment_history.csv")
 
-# =====================================================================
-# 🛠️ 外部APIとダミーデータの切り替え設定フラグ
-# =====================================================================
-# True にすると外部APIを叩かず、高速な内部ダミー自動生成ロジックに切り替わります。
-USE_DUMMY_DATA = False  
 
 def _calculate_dynamic_safety_days(base_days: int, usd_jpy: float, pmi: float, weather_msg: str) -> float:
     """外部インジケーター（為替・PMI・天候）を評価し、安全在庫日数を動的に変更する"""
@@ -42,7 +37,14 @@ def _calculate_dynamic_safety_days(base_days: int, usd_jpy: float, pmi: float, w
     # 最低3日〜最高14日間の範囲に収まるようにガードレールを引く
     return max(3.0, min(14.0, base_days * multiplier))
 
-# APIキー設定
+
+# =====================================================================
+# 🛠️ 外部APIとダミーデータの切り替え設定フラグ
+# =====================================================================
+# True にすると外部APIを叩かず、高速な内部ダミー自動生成ロジックに切り替わります。
+USE_DUMMY_DATA = False  
+
+# APIキー設定 (環境変数からのみ取得し、コード内には直接キーを書き込まない)
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 
@@ -76,6 +78,13 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     end_date = df_selected['date'].max()
     next_week_date = end_date + pd.Timedelta(weeks=1)
     
+    # 💡 外部通信ブロック対策用の「動的なリアルタイム自動計算デフォルトベース値」の定義
+    today_now = pd.Timestamp.now()
+    target_day_of_year = next_week_date.dayofyear
+    
+    # 四季のサインカーブから、1月なら寒く、8月なら暑くなるよう気象変化を動的自動算出（ハードコードの撤廃）
+    calc_default_temp = 16.0 + 11.0 * np.sin(2 * np.pi * (target_day_of_year - 105) / 365)
+    
     # ジオコーディングによる座標初期値（デフォルトは名古屋）
     lat, lon = 35.1814, 136.9066
     try:
@@ -99,7 +108,7 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
         next_week_temp_pred = float(np.random.uniform(15.0, 28.0))
         weather_message = f"[ダミーモード] {factory_location}周辺の気象情報：概ね平年並み"
     else:
-        # ① ドル円為替データの取得
+        # ① ドル円為替データの取得 (yfinanceベース、失敗時はセーフガード)
         df_fx = pd.DataFrame()
         try:
             ticker = yf.Ticker("JPY=X")
@@ -112,9 +121,9 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
 
         if df_fx.empty:
             fx_dates = pd.date_range(start=start_date, end=next_week_date, freq='D')
-            df_fx = pd.DataFrame({'date': fx_dates, 'usd_jpy': 150.0})
+            df_fx = pd.DataFrame({'date': fx_dates, 'usd_jpy': 155.0})
         
-        # ② 製造業PMIの取得
+        # ② 製造業PMIの取得 (FRED APIベース)
         df_pmi = pd.DataFrame()
         if FRED_API_KEY:
             try:
@@ -132,8 +141,7 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
             
         # ③ 天気予報連携
         weather_message = f"{factory_location}付近の気象に異常なし"
-        target_day_of_year = next_week_date.dayofyear
-        next_week_temp_pred = 16.0 + 11.0 * np.sin(2 * np.pi * (target_day_of_year - 105) / 365)
+        next_week_temp_pred = calc_default_temp
         
         try:
             w_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=temperature_2m_max,weather_code&timezone=Asia%2FTokyo"
@@ -163,7 +171,7 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     df_master['pmi'] = df_master['pmi'].ffill().bfill()
     df_master['usd_jpy'] = df_master['usd_jpy'].ffill().bfill()
     
-    latest_fx = df_master['usd_jpy'].iloc[-1] if not df_master.empty else 150.0
+    latest_fx = df_master['usd_jpy'].iloc[-1] if not df_master.empty else 155.0
     latest_fx_date = df_master['date'].iloc[-1].strftime('%Y-%m-%d') if not df_master.empty else None
 
     latest_pmi = df_master['pmi'].iloc[-1] if not df_master.empty else 50.0
@@ -181,7 +189,10 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     train_df = df_all[df_all['demand'].notna()].copy()
     target_df = df_all[df_all['demand'].isna()].copy()
     
-    # Prophetによるベース予測
+    # -----------------------------------------------------------------
+    # 🌟 モデル予測：要件定義書通りの加重アンサンブルブレンド (Prophet 0.4 : XGBoost 0.6)
+    # -----------------------------------------------------------------
+    # 1. Prophet単体モデルのフィッティングと来週予測
     prophet_train = train_df[['date', 'demand']].rename(columns={'date': 'ds', 'demand': 'y'})
     changepoints = max(1, min(5, int(data_length * 0.1)))
     model_prophet = Prophet(yearly_seasonality=False, weekly_seasonality=False, daily_seasonality=False, n_changepoints=changepoints)
@@ -189,16 +200,24 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
         model_prophet.yearly_seasonality = True
     model_prophet.fit(prophet_train)
     
-    train_df['prophet_pred'] = model_prophet.predict(prophet_train)['yhat'].values
-    target_df['prophet_pred'] = model_prophet.predict(target_df[['date']].rename(columns={'date': 'ds'}))['yhat'].values
+    prophet_train_pred = model_prophet.predict(prophet_train)['yhat'].values
+    prophet_next_pred = model_prophet.predict(target_df[['date']].rename(columns={'date': 'ds'}))['yhat'].values[0]
+    
+    # 2. XGBoost単体モデルの学習（外部マクロ要因のパターンを純粋に学習させる設計）
+    train_df['prophet_pred'] = prophet_train_pred
+    target_df['prophet_pred'] = prophet_next_pred
     
     # XGBoostによる最終ハイブリッド予測
     features = ['prophet_pred', 'usd_jpy', 'pmi', 'temperature', 'month', 'week_of_year']
     model_xgb = XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=3, random_state=42)
     model_xgb.fit(train_df[features], train_df['demand'])
     
-    next_week_demand_pred = max(0, int(model_xgb.predict(target_df[features])[0]))
+    xgb_next_pred = model_xgb.predict(target_df[features])[0]
     train_df['fitted'] = model_xgb.predict(train_df[features]).astype(int)
+    
+    # 3. 指定比率によるアンサンブルブレンド処理 (Prophet×0.4 + XGBoost×0.6)
+    final_pred = (prophet_next_pred * 0.4) + (xgb_next_pred * 0.6)
+    next_week_demand_pred = max(0, int(final_pred))
     
     return (
         next_week_demand_pred,
@@ -240,8 +259,10 @@ def calculate_forecast(factory_id: str, parts_id: str):
     today_now = pd.Timestamp.now()
     today_str = today_now.strftime("%Y-%m-%d")
     
-    # 💡 外部通信ブロック対策：エラー時のデフォルト値を「現在のリアルな値」に設定
-    today_fx = 161.1  
+    # =================================================================
+    # 💡 外部通信ブロック対策：過去の特定日付ハードコード値の完全廃止
+    # =================================================================
+    today_fx = latest_fx  # 最新の実数値または動的セーフガード値を継承
     try:
         fx_url = "https://api.exchangerate-api.com/v4/latest/USD"
         fx_res = requests.get(fx_url, timeout=3).json()
@@ -250,8 +271,8 @@ def calculate_forecast(factory_id: str, parts_id: str):
     except Exception:
         pass
 
-    # 2. 今日の気温・天気
-    today_temp = 26.5  
+    # 気温デフォルトもハードコードではなくマクロ変動値より安全に同期
+    today_temp = temp  
     today_weather = "現在異常なし"  
     try:
         w_url = f"https://api.open-meteo.com/v1/forecast?latitude=35.1814&longitude=136.9066&current=temperature_2m,weather_code&timezone=Asia/Tokyo"
@@ -263,7 +284,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
     except Exception:
         pass
 
-    today_pmi = 51.5 
+    today_pmi = latest_pmi  
     today_pmi_date = today_str
     if FRED_API_KEY and FRED_API_KEY.strip() != "":
         try:
@@ -389,14 +410,12 @@ def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
         "simulated_safety_days": round(simulated_safety_days, 1)  
     }
 
-def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = None) -> dict:
-    """曜日・時間帯別実績から次週の出荷ピークを予測・分配する (F-07)"""
-    if next_week_volume is None:
-        base_forecast = calculate_forecast(factory_id, parts_id)
-        if base_forecast is None:
-            return None
-        next_week_volume = base_forecast["next_week_forecast"]
-
+# -----------------------------------------------------------------
+# 🌟 新機能 F-07: 仕様書の厳密なインターフェースに則った型定義と処理の最適化
+# -----------------------------------------------------------------
+def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int) -> dict:
+    """曜日・時間帯別実績から次週の出荷ピークを予測・分配する (F-07仕様書完全準拠)"""
+    
     if not os.path.exists(JIT_HISTORY_PATH):
         return _fallback_jit_distribution(factory_id, parts_id, next_week_volume, "実績データファイルが存在しません")
 
@@ -442,6 +461,7 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = 
     allocated_sum = df_merged['pred_volume'].sum()
     diff = next_week_volume - allocated_sum
     
+    # 仕様書通りの「最も構成比率の高いスロット」への整合性補正処理
     if diff != 0 and len(df_merged) > 0:
         max_idx = df_merged['ratio'].idxmax()
         df_merged.loc[max_idx, 'pred_volume'] = max(0, df_merged.loc[max_idx, 'pred_volume'] + diff)
@@ -452,7 +472,7 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int = 
             "day": row['day'],
             "hour": row['hour'],
             "volume": int(row['pred_volume']),
-            "ratio": round(float(row['ratio']), 4)
+            "ratio": round(float(row['ratio']), 4)  # 小数点以下4桁で統一化
         })
 
     max_slot = df_merged.loc[df_merged['pred_volume'].idxmax()]
