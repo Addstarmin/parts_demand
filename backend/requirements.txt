@@ -8,3 +8,6 @@ yfinance==0.2.40
 fredapi==0.5.2
 requests==2.32.3
 cmdstanpy==1.2.3
+python-dotenv==1.0.1
+pytest==8.2.2
+APScheduler==3.10.4

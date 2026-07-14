@@ -157,6 +157,8 @@ button {
 .select-area {
   display: flex;
   gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 select,
@@ -236,6 +238,189 @@ input {
   border-radius: 999px;
   font-size: 13px;
   font-weight: 700;
+}
+
+.danger-badge {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.success-badge {
+  background: #dcfce7;
+  color: #047857;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.segmented button {
+  border: none;
+  background: transparent;
+  padding: 10px 14px;
+  font-weight: 700;
+  color: #374151;
+}
+
+.segmented button.active {
+  background: #2563eb;
+  color: white;
+}
+
+.content-tabs {
+  margin-bottom: 18px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+
+.form-grid label,
+.simulation-box label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #374151;
+  font-weight: 700;
+}
+
+.button-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+
+.button-row button,
+.content-card button {
+  border: none;
+  background: #2563eb;
+  color: white;
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-weight: 700;
+}
+
+.button-row button:disabled,
+.content-card button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.metric-grid > div {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.metric-grid span {
+  display: block;
+  color: #6b7280;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.metric-grid strong {
+  font-size: 20px;
+}
+
+.decision-summary {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 16px;
+  padding: 20px;
+  margin-bottom: 22px;
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.decision-summary.up {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+.decision-summary.down {
+  background: #fff7ed;
+  border-color: #fdba74;
+}
+
+.decision-summary h2,
+.decision-summary p {
+  margin: 6px 0;
+}
+
+.summary-metrics {
+  min-width: 160px;
+  text-align: right;
+}
+
+.summary-metrics strong {
+  display: block;
+  font-size: 28px;
+}
+
+.summary-metrics span {
+  display: block;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+.clickable-row {
+  cursor: pointer;
+}
+
+.clickable-row:hover {
+  background: #f9fafb;
+}
+
+.note {
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.empty-state {
+  background: #f9fafb;
+  border: 1px dashed #cbd5e1;
+  color: #64748b;
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+
+.status-badge {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #e5e7eb;
+  color: #374151;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.status-badge.up {
+  background: #dcfce7;
+  color: #047857;
+}
+
+.status-badge.down {
+  background: #fee2e2;
+  color: #b91c1c;
 }
 
 .indicator-grid {
@@ -342,7 +527,9 @@ th {
 
   .kpi-grid,
   .indicator-grid,
-  .detail-grid {
+  .detail-grid,
+  .form-grid,
+  .metric-grid {
     grid-template-columns: 1fr;
   }
 
@@ -354,10 +541,20 @@ th {
   .select-area {
     width: 100%;
     flex-direction: column;
+    align-items: stretch;
   }
 
-  select {
+  select,
+  input {
     width: 100%;
+  }
+
+  .decision-summary {
+    flex-direction: column;
+  }
+
+  .summary-metrics {
+    text-align: left;
   }
 }
 

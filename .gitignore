@@ -8,3 +8,5 @@ backend/venv
 *.pyc
 .vscode
 backend/.env
+backend/key.env
+backend/data/cmdx.sqlite3

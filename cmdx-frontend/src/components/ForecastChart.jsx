@@ -18,7 +18,7 @@ ChartJS.register(
   Legend
 );
 
-function ForecastChart({ chartData }) {
+function ForecastChart({ chartData, title = "需要予測・在庫シミュレーション推移" }) {
   if (!chartData) return null;
 
   const labels = chartData.map((item) => item.date);
@@ -36,11 +36,21 @@ function ForecastChart({ chartData }) {
         spanGaps: true,
       },
       {
-        label: "AI需要予測",
-        data: chartData.map((item) => item.forecast),
+        label: "通常予測",
+        data: chartData.map((item) => item.normal_forecast ?? item.forecast),
         borderColor: "#2563eb",      // 鮮やかなブルー
         backgroundColor: "transparent",
         borderWidth: 3,
+        tension: 0.35,
+        spanGaps: true,
+      },
+      {
+        label: "内示調整後予測",
+        data: chartData.map((item) => item.adjusted_forecast),
+        borderColor: "#f97316",
+        backgroundColor: "transparent",
+        borderWidth: 3,
+        borderDash: [8, 5],
         tension: 0.35,
         spanGaps: true,
       },
@@ -78,13 +88,20 @@ function ForecastChart({ chartData }) {
             if (value === null || value === undefined) return `${context.dataset.label}: データなし`;
             return `${context.dataset.label}: ${Number(value).toLocaleString()}個`;
           },
+          afterBody: (items) => {
+            const item = chartData[items[0].dataIndex];
+            if (item?.difference === null || item?.difference === undefined) return "";
+            return `差分: ${Number(item.difference).toLocaleString()}個`;
+          },
         },
       },
     },
     scales: {
       y: {
         beginAtZero: true,
+        title: { display: true, text: "数量（個）" },
       },
+      x: { title: { display: true, text: "週" } },
     },
   };
 
@@ -93,7 +110,7 @@ function ForecastChart({ chartData }) {
       <div className="section-header">
         <div>
           <p className="section-label">Forecast</p>
-          <h2>需要予測・在庫シミュレーション推移</h2>
+          <h2>{title}</h2>
         </div>
         <span className="badge">AI予測モデル連動</span>
       </div>

@@ -1,0 +1,6 @@
+manufacturer_id,product_id,allocation_ratio
+M-A,PROD-A,1.0
+M-A,PROD-C,0.6
+M-B,PROD-B,1.0
+M-C,PROD-C,0.4
+M-C,PROD-D,1.0

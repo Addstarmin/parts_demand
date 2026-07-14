@@ -1,113 +1,127 @@
-const API_BASE_URL = "http://localhost:8000/api";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 const handleResponse = async (response) => {
-  const data = await response.json();
-
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(data.detail || data.error || "API通信でエラーが発生しました");
   }
-
   return data;
 };
 
-export const getFactories = async () => {
-  const response = await fetch(`${API_BASE_URL}/factories`);
-  return handleResponse(response);
+const get = async (path) => handleResponse(await fetch(`${API_BASE_URL}${path}`));
+
+const send = async (path, method, payload) =>
+  handleResponse(
+    await fetch(`${API_BASE_URL}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+  );
+
+export const getFactories = () => get("/factories");
+export const getParts = () => get("/parts");
+export const getManufacturers = () => get("/manufacturers");
+export const getProducts = (factoryId) => get(`/products${factoryId ? `?factory_id=${factoryId}` : ""}`);
+export const getProductBom = (productId) => get(`/products/${productId}/bom`);
+export const getSafetyStockSettings = () => get("/safety-stock/settings");
+export const getSafetyStockCurrent = () => get("/safety-stock/current");
+export const getSafetyStockHistory = () => get("/safety-stock/history");
+export const previewSafetyStock = () => get("/safety-stock/preview");
+export const optimizeSafetyStock = () => send("/safety-stock/optimize", "POST", {});
+export const saveSafetyStockSettings = (settings) => send("/safety-stock/settings", "PUT", settings);
+export const getProductionNoticeHistory = () => get("/simulations/production-notice/history");
+
+const downloadCsv = (path, filename) => {
+  const link = document.createElement("a");
+  link.href = `${API_BASE_URL}${path}`;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 };
 
-export const getParts = async () => {
-  const response = await fetch(`${API_BASE_URL}/parts`);
-  return handleResponse(response);
+export const downloadActualHistoryCsv = ({ factoryId, targetType, targetId }) => {
+  const params = new URLSearchParams();
+  if (factoryId) params.set("factory_id", factoryId);
+  if (targetType === "product") params.set("product_id", targetId);
+  if (targetType === "part") params.set("parts_id", targetId);
+  downloadCsv(`/download/actual-history.csv?${params.toString()}`, `cmdx_actual_history_${targetId}.csv`);
+};
+
+export const downloadForecastCsv = ({ factoryId, targetType, targetId }) => {
+  const params = new URLSearchParams({
+    factory_id: factoryId,
+    target_type: targetType,
+    target_id: targetId,
+  });
+  downloadCsv(`/download/forecast.csv?${params.toString()}`, `cmdx_forecast_${targetId}.csv`);
+};
+
+export const downloadFutureActualTemplateCsv = ({ factoryId, targetType, targetId }) => {
+  const params = new URLSearchParams();
+  if (factoryId) params.set("factory_id", factoryId);
+  if (targetType === "product") params.set("product_id", targetId);
+  if (targetType === "part") params.set("parts_id", targetId);
+  downloadCsv(`/download/future-actual-template.csv?${params.toString()}`, `cmdx_future_actual_template_${targetId}.csv`);
 };
 
 export const getForecast = async (factoryId, partsId) => {
-  if (!factoryId || !partsId) {
-    throw new Error("工場IDと部品IDを選択してください");
-  }
+  if (!factoryId || !partsId) throw new Error("工場IDと部品IDを選択してください");
+  const params = new URLSearchParams({ factory_id: factoryId, parts_id: partsId });
+  return get(`/forecast?${params.toString()}`);
+};
 
-  const params = new URLSearchParams({
-    factory_id: factoryId,
-    parts_id: partsId,
-  });
-
-  const response = await fetch(`${API_BASE_URL}/forecast?${params.toString()}`);
-  return handleResponse(response);
+export const getProductForecast = async (factoryId, productId) => {
+  if (!factoryId || !productId) throw new Error("工場IDと製品IDを選択してください");
+  const params = new URLSearchParams({ factory_id: factoryId, product_id: productId });
+  return get(`/forecast/product?${params.toString()}`);
 };
 
 export const runSimulation = async ({ factoryId, partsId, usdJpy }) => {
   const value = Number(usdJpy);
-
-  if (Number.isNaN(value)) {
-    throw new Error("ドル円レートは数値で入力してください");
+  if (Number.isNaN(value) || value <= 0 || value >= 500) {
+    throw new Error("ドル円レートは0より大きく500未満で入力してください");
   }
-
-  if (value <= 0) {
-    throw new Error("ドル円レートは0より大きい値を入力してください");
-  }
-
-  if (value >= 500) {
-    throw new Error("ドル円レートの入力値が異常です");
-  }
-
-  const response = await fetch(`${API_BASE_URL}/simulate`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      factory_id: factoryId,
-      parts_id: partsId,
-      usd_jpy: value,
-    }),
+  const data = await send("/simulate", "POST", {
+    factory_id: factoryId,
+    parts_id: partsId,
+    usd_jpy: value,
   });
-
-  const data = await handleResponse(response);
-
   const rate = Number(data.demand_change_rate);
-
-  let message = data.message;
-
-  if (rate > 0) {
-    message = `需要が${Math.abs(rate)}%増加すると予測されます`;
-  } else if (rate < 0) {
-    message = `需要が${Math.abs(rate)}%減少すると予測されます`;
-  } else {
-    message = "需要変動はほとんどありません";
-  }
-
   return {
     ...data,
-    message,
+    message:
+      rate > 0
+        ? `需要が${Math.abs(rate)}%増加すると予測されます`
+        : rate < 0
+          ? `需要が${Math.abs(rate)}%減少すると予測されます`
+          : "需要変動はほとんどありません",
   };
 };
 
-export const getShipmentPeak = async (
-  factoryId,
-  partsId,
-  nextWeekVolume
-) => {
-  const response = await fetch(
-    `http://localhost:8000/api/shipment-peak?factory_id=${factoryId}&parts_id=${partsId}&next_week_volume=${nextWeekVolume}`
-  );
-
-  if (!response.ok) {
-    throw new Error("出荷ピーク予測取得失敗");
+export const runProductionNotice = ({ factoryId, manufacturerId, adjustmentRate, targetType, targetId }) => {
+  const value = Number(adjustmentRate);
+  if (Number.isNaN(value) || value < -50 || value > 50) {
+    throw new Error("調整率は-50%〜+50%で入力してください");
   }
-
-  return response.json();
-};
-
-export const productForecast = async (productId, forecast) => {
-  const response = await fetch(`${API_BASE_URL}/product/forecast`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      product_id: productId,
-      forecast: forecast,
-    }),
+  return send("/simulations/production-notice", "POST", {
+    factory_id: factoryId,
+    manufacturer_id: manufacturerId,
+    adjustment_rate: value,
+    target_type: targetType || "product",
+    target_id: targetId || null,
   });
-
-  return handleResponse(response);
 };
+
+export const getShipmentPeak = async (factoryId, partsId, nextWeekVolume) => {
+  const params = new URLSearchParams({
+    factory_id: factoryId,
+    parts_id: partsId,
+    next_week_volume: nextWeekVolume,
+  });
+  return get(`/shipment-peak?${params.toString()}`);
+};
+
+export const productForecast = async (productId, forecast) =>
+  send("/product/forecast", "POST", { product_id: productId, forecast });

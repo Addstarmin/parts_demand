@@ -5,19 +5,21 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime
 from fredapi import Fred
-from prophet import Prophet
-from xgboost import XGBRegressor
 from dotenv import load_dotenv
+from pathlib import Path
+
+from services.data_utils import read_csv, safe_int
+from services.evaluation_service import evaluate_timeseries
 
 # .envファイルを読み込む
 load_dotenv()
 
 # 各種CSVファイルへのパス定義
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FACTORY_MASTER_PATH = os.path.join(BASE_DIR, "data", "factory_master.csv")
-PARTS_MASTER_PATH = os.path.join(BASE_DIR, "data", "parts_master.csv")
-HISTORY_PATH = os.path.join(BASE_DIR, "data", "internal_performance_history.csv")
-JIT_HISTORY_PATH = os.path.join(BASE_DIR, "data", "jit_shipment_history.csv")
+BASE_DIR = Path(__file__).resolve().parents[1]
+FACTORY_MASTER_PATH = BASE_DIR / "data" / "factory_master.csv"
+PARTS_MASTER_PATH = BASE_DIR / "data" / "parts_master.csv"
+HISTORY_PATH = BASE_DIR / "data" / "internal_performance_history.csv"
+JIT_HISTORY_PATH = BASE_DIR / "data" / "jit_shipment_history.csv"
 
 
 def _calculate_dynamic_safety_days(base_days: int, usd_jpy: float, pmi: float, weather_msg: str) -> float:
@@ -52,7 +54,7 @@ OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 def load_masters():
     """マスタおよび履歴データのロード共通化"""
     df_f = pd.read_csv(FACTORY_MASTER_PATH)
-    df_p = pd.read_csv(PARTS_MASTER_PATH if os.path.exists(PARTS_MASTER_PATH) else pd.compat.StringIO("parts_id,parts_name,safety_stock_days\nPT-1002,駆動ギアA,7\nPT-1003,制御基板B,10"))
+    df_p = pd.read_csv(PARTS_MASTER_PATH)
     if "parts_id" not in df_p.columns:
         df_p = pd.DataFrame([
             {"parts_id": "PT-1002", "parts_name": "駆動ギアA", "safety_stock_days": 7},
@@ -195,6 +197,9 @@ def _core_engine(df_selected, factory_location, safety_stock_days):
     # 1. Prophet単体モデルのフィッティングと来週予測
     prophet_train = train_df[['date', 'demand']].rename(columns={'date': 'ds', 'demand': 'y'})
     changepoints = max(1, min(5, int(data_length * 0.1)))
+    from prophet import Prophet
+    from xgboost import XGBRegressor
+
     model_prophet = Prophet(yearly_seasonality=False, weekly_seasonality=False, daily_seasonality=False, n_changepoints=changepoints)
     if data_length > 52:
         model_prophet.yearly_seasonality = True
@@ -241,7 +246,7 @@ def calculate_forecast(factory_id: str, parts_id: str):
     f_info = df_f[df_f['factory_id'] == factory_id].iloc[0]
     p_info = df_p[df_p['parts_id'] == parts_id].iloc[0]
 
-    safety_stock_days = 7 if pd.isna(p_info['safety_stock_days']) else int(p_info['safety_stock_days'])
+    safety_stock_days = 7 if "safety_stock_days" not in p_info or pd.isna(p_info['safety_stock_days']) else int(p_info['safety_stock_days'])
     current_stock = int(df_selected['ending_stock'].iloc[-1])
     
     (
@@ -303,9 +308,37 @@ def calculate_forecast(factory_id: str, parts_id: str):
     )
     # 動的な日数をもとに安全在庫の【数量】を計算
     safety_stock_vol = int((next_week_demand_pred / 7) * dynamic_safety_days)
+    safety_basis = {
+        "source": "external_indicator_days",
+        "previous_safety_stock": None,
+        "change_rate": None,
+        "updated_at": None,
+        "rmse": None,
+        "lead_time_days": None,
+        "safety_factor": None,
+    }
+
+    safety_master = read_csv("safety_stock_master.csv")
+    if not safety_master.empty:
+        rows = safety_master[(safety_master["factory_id"] == factory_id) & (safety_master["parts_id"] == parts_id)]
+        if not rows.empty:
+            latest = rows.sort_values("updated_at").iloc[-1]
+            previous = safe_int(latest.get("previous_safety_stock"), safety_stock_vol)
+            optimized = safe_int(latest.get("safety_stock_quantity"), safety_stock_vol)
+            safety_stock_vol = optimized
+            safety_basis = {
+                "source": "dynamic_safety_stock_master",
+                "previous_safety_stock": previous,
+                "change_rate": 0 if previous == 0 else round((optimized - previous) / previous, 4),
+                "updated_at": latest.get("updated_at"),
+                "rmse": safe_int(latest.get("rmse")),
+                "lead_time_days": float(latest.get("lead_time_days", 0) or 0),
+                "safety_factor": float(latest.get("safety_factor", 0) or 0),
+            }
     recommended_production = max(0, next_week_demand_pred + safety_stock_vol - current_stock)
     recommended_order = recommended_production
     recommended_shipping = next_week_demand_pred
+    warehouse_capacity = max(safety_stock_vol * 8, next_week_demand_pred * 6, current_stock + 1)
     
     risk_level = "HEALTHY"
     risk_message = "在庫水準およびサプライチェーン供給力は完全に安全閾値を維持しています。"
@@ -313,10 +346,12 @@ def calculate_forecast(factory_id: str, parts_id: str):
     if current_stock < safety_stock_vol:
         risk_level = "CRITICAL"
         risk_message = f"🚨【危険】現在庫({current_stock}個)が安全在庫目安({safety_stock_vol}個)を大幅に下回っています！即座に【{recommended_order}個】の発注・生産指示を実施してください。"
+    elif current_stock > warehouse_capacity:
+        risk_level = "WARNING"
+        risk_message = f"⚠️【過剰在庫】現在庫({current_stock}個)が倉庫上限目安({warehouse_capacity}個)を超えています。出荷前倒しまたは生産抑制を検討してください。"
     elif current_stock < (next_week_demand_pred * 1.5):
         risk_level = "WARNING"
         risk_message = f"⚠️【警告】次週の予測需要増に伴い、1〜2週間以内に安全在庫を割り込むリスクがあります。先行増産を推奨します。"
-
     # チャートデータのシリアライズ配列 (過去2枠分)
     forecast_chart = []
     for _, row in train_df.tail(2).iterrows():
@@ -336,6 +371,8 @@ def calculate_forecast(factory_id: str, parts_id: str):
         "safety_stock": safety_stock_vol
     })
 
+    eval_df = df_selected[["date", "demand"]].copy()
+
     return {
         "factory_id": factory_id,
         "factory_name": f_info['factory_name'],
@@ -348,6 +385,8 @@ def calculate_forecast(factory_id: str, parts_id: str):
         "recommended_order": recommended_order,
         "recommended_production": recommended_production,
         "recommended_shipping": recommended_shipping,
+        "parts_demand": next_week_demand_pred,
+        "warehouse_capacity": warehouse_capacity,
         "risk_level": risk_level,
         "risk_message": risk_message,
         "indicators": {
@@ -367,7 +406,9 @@ def calculate_forecast(factory_id: str, parts_id: str):
             "weather_date": today_str,
             "weather_message": today_weather
         },
-        "forecast_chart": forecast_chart
+        "forecast_chart": forecast_chart,
+        "safety_stock_detail": safety_basis,
+        "model_evaluation": evaluate_timeseries(eval_df, value_col="demand")
     }
 
 def run_simulation(factory_id: str, parts_id: str, input_usd_jpy: float):
@@ -446,7 +487,7 @@ def calculate_jit_peaks(factory_id: str, parts_id: str, next_week_volume: int) -
             all_slots.append({'day_num': d, 'day': days_mapped[d], 'hour': h, 'actual_volume': 0})
     df_base_slots = pd.DataFrame(all_slots)
 
-    # 固定時間帯のみに絞り込む
+    df_selected['hour_min'] = df_selected['timestamp'].dt.strftime('%H:%M')
     df_selected = df_selected[df_selected['hour_min'].isin(target_hours)]
 
     df_grouped = df_selected.groupby(['day_of_week', 'hour_min'])['shipment_volume'].sum().reset_index()
@@ -527,7 +568,7 @@ def _fallback_jit_distribution(factory_id: str, parts_id: str, next_week_volume:
     }
 
 def load_bom():
-    return pd.read_csv("data/bom_master.csv")
+    return pd.read_csv(BASE_DIR / "data" / "bom_master.csv")
 
 
 def expand_product(product_id, forecast):

@@ -20,7 +20,7 @@ function ShipmentPeakChart({ data = [], peakInfo }) {
   if (!data.length || !peakInfo) return null;
 
   const days = ["月", "火", "水", "木", "金", "土", "日"];
-  const hours = ["06:30", "10:00", "15:30", "20:00"];
+  const hours = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, "0")}:00`);
 
   const dayRows = days.map((day) => {
     const row = { day };
@@ -38,17 +38,17 @@ function ShipmentPeakChart({ data = [], peakInfo }) {
     return row;
   });
 
-  const colors = {
-    "06:30": "rgba(59,130,246,0.8)",
-    "10:00": "rgba(249,115,22,0.8)",
-    "15:30": "rgba(34,197,94,0.8)",
-    "20:00": "rgba(168,85,247,0.8)",
-  };
+  const colors = Object.fromEntries(
+    hours.map((hour, index) => [
+      hour,
+      `hsla(${Math.round((index / 24) * 320)}, 70%, 52%, 0.72)`,
+    ])
+  );
 
   const chartData = {
     labels: days,
     datasets: hours.map((hour) => ({
-      label: `${hour}便`,
+      label: `${hour}台`,
       data: dayRows.map((row) => row[hour]),
       backgroundColor: colors[hour],
       borderColor: colors[hour],
@@ -104,7 +104,7 @@ function ShipmentPeakChart({ data = [], peakInfo }) {
         </div>
 
         <span className="badge">
-          曜日・時間帯別
+          曜日（月〜日）×24時間
         </span>
       </div>
 

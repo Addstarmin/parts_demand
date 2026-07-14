@@ -1,3 +1,5 @@
-product_id,product_name,factory_id,unit_price
-PROD-A,キャブレターASSY,F-02,15000
-PROD-B,エンジンASSY,F-02,22000
+product_id,product_name,factory_id,manufacturer_id,unit_price,description
+PROD-A,キャブレターASSY,F-02,M-A,15000,小型エンジン向け吸気系アセンブリ
+PROD-B,エンジン制御ASSY,F-02,M-B,22000,制御基板とセンサーを組み込んだ制御ユニット
+PROD-C,ブレーキ制御ASSY,F-03,M-A,28000,複数メーカーへ配分納入する制御系アセンブリ
+PROD-D,冷却ユニットASSY,F-01,M-C,18000,冷却ファンと配線を含む熱対策ユニット
