@@ -31,6 +31,28 @@ export const previewSafetyStock = () => get("/safety-stock/preview");
 export const optimizeSafetyStock = () => send("/safety-stock/optimize", "POST", {});
 export const saveSafetyStockSettings = (settings) => send("/safety-stock/settings", "PUT", settings);
 export const getProductionNoticeHistory = () => get("/simulations/production-notice/history");
+export const getDataManagementSummary = () => get("/data-management/summary");
+export const getDataManagementDatasets = () => get("/data-management/datasets");
+export const getDataManagementPreview = (datasetId, limit = 20) => get(`/data-management/datasets/${datasetId}/preview?limit=${limit}`);
+export const validateDataImport = (payload) => send("/data-management/import/validate", "POST", payload);
+export const commitDataImport = (payload) => send("/data-management/import/commit", "POST", payload);
+export const getDataBackups = () => get("/data-management/backups");
+export const restoreDataBackup = (backupId) => send(`/data-management/backups/${backupId}/restore`, "POST", {});
+export const previewDemoNextWeek = () => send("/data-management/demo/next-week/preview", "POST", {});
+export const commitDemoNextWeek = (options) => {
+  const params = new URLSearchParams({
+    recalculate_forecast: String(options?.recalculateForecast ?? true),
+    recalculate_safety_stock: String(options?.recalculateSafetyStock ?? true),
+  });
+  return send(`/data-management/demo/next-week/commit?${params.toString()}`, "POST", {});
+};
+export const recalculateDataForecast = () => send("/data-management/recalculate/forecast", "POST", {});
+export const recalculateDataSafetyStock = () => send("/data-management/recalculate/safety-stock", "POST", {});
+export const recalculateDataAll = () => send("/data-management/recalculate/all", "POST", {});
+export const getWeeklyUpdateSettings = () => get("/data-management/weekly-update/settings");
+export const saveWeeklyUpdateSettings = (settings) => send("/data-management/weekly-update/settings", "PUT", settings);
+export const runWeeklyUpdateNow = () => send("/data-management/weekly-update/run-now", "POST", {});
+export const getWeeklyUpdateHistory = () => get("/data-management/weekly-update/history");
 
 const downloadCsv = (path, filename) => {
   const link = document.createElement("a");
@@ -64,6 +86,28 @@ export const downloadFutureActualTemplateCsv = ({ factoryId, targetType, targetI
   if (targetType === "product") params.set("product_id", targetId);
   if (targetType === "part") params.set("parts_id", targetId);
   downloadCsv(`/download/future-actual-template.csv?${params.toString()}`, `cmdx_future_actual_template_${targetId}.csv`);
+};
+
+export const downloadDatasetCsv = (datasetId) =>
+  downloadCsv(`/data-management/datasets/${datasetId}/download`, `${datasetId}.csv`);
+
+export const downloadAllDataZip = () =>
+  downloadCsv("/data-management/export-all", "cmdx_data_export.zip");
+
+export const downloadManagedForecastCsv = ({ factoryId, targetType, targetId } = {}) => {
+  const params = new URLSearchParams();
+  if (factoryId) params.set("factory_id", factoryId);
+  if (targetType) params.set("target_type", targetType);
+  if (targetId) params.set("target_id", targetId);
+  downloadCsv(`/data-management/forecast-export?${params.toString()}`, "cmdx_forecast_export.csv");
+};
+
+export const downloadManagedFutureTemplate = ({ factoryId, targetType, targetId } = {}) => {
+  const params = new URLSearchParams();
+  if (factoryId) params.set("factory_id", factoryId);
+  if (targetType === "product") params.set("product_id", targetId);
+  if (targetType === "part") params.set("parts_id", targetId);
+  downloadCsv(`/data-management/future-actual-template?${params.toString()}`, "cmdx_future_actual_template.csv");
 };
 
 export const getForecast = async (factoryId, partsId) => {

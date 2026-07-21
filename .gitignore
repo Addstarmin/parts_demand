@@ -10,3 +10,5 @@ backend/venv
 backend/.env
 backend/key.env
 backend/data/cmdx.sqlite3
+backend/data/.imports/
+backend/data/backups/

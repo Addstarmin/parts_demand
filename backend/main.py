@@ -39,6 +39,29 @@ from services.safety_stock_service import (
 )
 from services.scheduler_service import start_safety_stock_scheduler
 from services.storage_service import get_settings, init_db
+from services.data_management_service import (
+    commit_demo_next_week,
+    commit_import,
+    dataset_csv_bytes,
+    dataset_info,
+    export_all_zip,
+    forecast_export_csv,
+    future_template_csv,
+    get_preview,
+    get_summary,
+    get_weekly_settings,
+    list_backups,
+    list_datasets,
+    preview_demo_next_week,
+    recalculate_all,
+    recalculate_forecast,
+    recalculate_safety_stock,
+    restore_backup,
+    run_weekly_update_now,
+    save_weekly_settings,
+    validate_import,
+    weekly_history,
+)
 
 app = FastAPI(title="CMD-X サプライチェーン需要予測・在庫最適化 API", version="3.0.0")
 
@@ -105,6 +128,33 @@ class SafetyStockSettingsRequest(BaseModel):
         if min_value is not None and value < min_value:
             raise ValueError("max_safety_stockはmin_safety_stock以上で指定してください")
         return value
+
+
+class ImportValidateRequest(BaseModel):
+    dataset_id: str
+    update_mode: str
+    csv_text: str
+    original_filename: str = "upload.csv"
+
+
+class ImportCommitRequest(BaseModel):
+    session_id: str
+    recalculate_forecast: bool = False
+    recalculate_safety_stock: bool = False
+    confirm_replace: bool = False
+
+
+class WeeklySettingsRequest(BaseModel):
+    enabled: bool = False
+    day: str = "mon"
+    hour: int = Field(default=6, ge=0, le=23)
+    minute: int = Field(default=0, ge=0, le=59)
+    timezone: str = "Asia/Tokyo"
+    source: str = "demo"
+    directory: str = ""
+    recalculate_forecast: bool = True
+    recalculate_safety_stock: bool = True
+    retry_count: int = Field(default=0, ge=0, le=5)
 
 
 @app.get("/api/current-indicators")
@@ -278,6 +328,158 @@ def download_future_actual_template(factory_id: str | None = None, parts_id: str
     csv_text = future_actual_template_csv(factory_id=factory_id, parts_id=parts_id, product_id=product_id)
     target = product_id or parts_id or "blank"
     return _csv_response(csv_text, f"cmdx_future_actual_template_{target}.csv")
+
+
+@app.get("/api/data-management/summary")
+def data_management_summary():
+    return get_summary()
+
+
+@app.get("/api/data-management/datasets")
+def data_management_datasets():
+    return list_datasets()
+
+
+@app.get("/api/data-management/datasets/{dataset_id}")
+def data_management_dataset(dataset_id: str):
+    try:
+        return dataset_info(dataset_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/data-management/datasets/{dataset_id}/preview")
+def data_management_preview(dataset_id: str, limit: int = Query(20, ge=1, le=100)):
+    try:
+        return get_preview(dataset_id, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/data-management/datasets/{dataset_id}/download")
+def data_management_download(dataset_id: str):
+    try:
+        info = dataset_info(dataset_id)
+        return Response(
+            content=dataset_csv_bytes(dataset_id),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(info['filename'])}"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/data-management/export-all")
+def data_management_export_all():
+    content, filename = export_all_zip()
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
+@app.post("/api/data-management/import/validate")
+def data_management_import_validate(payload: ImportValidateRequest):
+    try:
+        return validate_import(payload.dataset_id, payload.update_mode, payload.csv_text, payload.original_filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/data-management/import/commit")
+def data_management_import_commit(payload: ImportCommitRequest):
+    try:
+        return commit_import(
+            payload.session_id,
+            recalculate_forecast=payload.recalculate_forecast,
+            recalculate_safety_stock=payload.recalculate_safety_stock,
+            confirm_replace=payload.confirm_replace,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/data-management/backups")
+def data_management_backups():
+    return list_backups()
+
+
+@app.post("/api/data-management/backups/{backup_id}/restore")
+def data_management_restore_backup(backup_id: str):
+    try:
+        return restore_backup(backup_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/data-management/forecast-export")
+def data_management_forecast_export(factory_id: str | None = None, target_type: str | None = None, target_id: str | None = None):
+    return Response(
+        content=forecast_export_csv(factory_id=factory_id, target_type=target_type, target_id=target_id),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename*=UTF-8''cmdx_forecast_export.csv"},
+    )
+
+
+@app.get("/api/data-management/future-actual-template")
+def data_management_future_template(factory_id: str | None = None, parts_id: str | None = None, product_id: str | None = None):
+    return Response(
+        content=future_template_csv(factory_id=factory_id, parts_id=parts_id, product_id=product_id),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename*=UTF-8''cmdx_future_actual_template.csv"},
+    )
+
+
+@app.post("/api/data-management/recalculate/forecast")
+def data_management_recalculate_forecast():
+    return recalculate_forecast()
+
+
+@app.post("/api/data-management/recalculate/safety-stock")
+def data_management_recalculate_safety_stock():
+    return recalculate_safety_stock()
+
+
+@app.post("/api/data-management/recalculate/all")
+def data_management_recalculate_all():
+    return recalculate_all()
+
+
+@app.get("/api/data-management/weekly-update/settings")
+def data_management_weekly_settings():
+    return get_weekly_settings()
+
+
+@app.put("/api/data-management/weekly-update/settings")
+def data_management_save_weekly_settings(payload: WeeklySettingsRequest):
+    try:
+        return save_weekly_settings(payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/data-management/weekly-update/run-now")
+def data_management_weekly_run_now():
+    try:
+        return run_weekly_update_now()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/api/data-management/weekly-update/history")
+def data_management_weekly_history(limit: int = Query(50, ge=1, le=200)):
+    return weekly_history(limit)
+
+
+@app.post("/api/data-management/demo/next-week/preview")
+def data_management_demo_next_week_preview():
+    return preview_demo_next_week()
+
+
+@app.post("/api/data-management/demo/next-week/commit")
+def data_management_demo_next_week_commit(recalculate_forecast: bool = True, recalculate_safety_stock: bool = True):
+    return commit_demo_next_week(recalculate_forecast, recalculate_safety_stock)
 
 
 @app.post("/api/product/forecast")

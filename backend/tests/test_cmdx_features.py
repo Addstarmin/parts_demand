@@ -1,4 +1,6 @@
 import sys
+import hashlib
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,27 @@ from services.safety_stock_service import (
 )
 from services.forecast_service import calculate_forecast, calculate_jit_peaks
 from services.download_service import actual_history_csv, forecast_csv, future_actual_template_csv
+
+
+ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = ROOT / "backend" / "data"
+
+
+def _csv_digest() -> str:
+    h = hashlib.sha256()
+    for path in sorted(DATA_DIR.glob("*.csv")):
+        h.update(path.name.encode())
+        h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def test_demo_data_generation_is_deterministic_and_valid():
+    subprocess.run([sys.executable, "-m", "scripts.generate_demo_data"], cwd=ROOT, check=True)
+    first = _csv_digest()
+    subprocess.run([sys.executable, "-m", "scripts.generate_demo_data"], cwd=ROOT, check=True)
+    second = _csv_digest()
+    assert first == second
+    subprocess.run([sys.executable, "-m", "scripts.validate_demo_data"], cwd=ROOT, check=True)
 
 
 def test_products_and_bom_are_available():
@@ -38,6 +61,16 @@ def test_product_forecast_and_bom_required_quantity():
     component = next(item for item in result["component_forecasts"] if item["parts_id"] == "PT-1002")
     next_product = next(point["normal_forecast"] for point in result["forecast_chart"] if point["normal_forecast"] is not None)
     assert component["next_week_required"] == next_product * component["quantity_per_product"]
+
+
+def test_representative_product_component_kpis_are_positive():
+    result = get_product_forecast("F-02", "PROD-A")
+    component = next(item for item in result["component_forecasts"] if item["parts_id"] == "PT-1002")
+    assert 1500 <= component["parts_demand"] <= 3000
+    assert component["recommended_production"] > 0
+    assert component["recommended_order"] > 0
+    assert component["recommended_shipping"] > 0
+    assert component["current_stock"] < component["parts_demand"] + component["dynamic_safety_stock"]
 
 
 def test_shared_part_exists_across_multiple_products():
@@ -72,6 +105,16 @@ def test_production_notice_allocation_ratio_under_one():
     assert abs(product["difference"] / product["normal_total"]) < 0.2
     part = result["affected_parts"][0]
     assert sum(slot["adjusted_volume"] for slot in part["jit_peaks"]) == part["adjusted_next_week_volume"]
+
+
+def test_production_notice_minus_20_is_lower_than_normal():
+    result = run_production_notice_simulation(
+        {"factory_id": "F-02", "manufacturer_id": "M-A", "adjustment_rate": -20, "target_type": "product", "target_id": "PROD-A"}
+    )
+    product = result["affected_products"][0]
+    future_points = [point for point in product["forecast_chart"] if point["normal_forecast"] is not None]
+    assert future_points
+    assert all(point["adjusted_forecast"] < point["normal_forecast"] for point in future_points)
 
 
 def test_unmapped_target_product_is_rejected():
@@ -125,6 +168,28 @@ def test_jit_ratios_sum_and_volume_integrity():
     assert len(result["peak_data"]) == 28
     assert abs(sum(item["ratio"] for item in result["peak_data"]) - 1.0) < 0.01
     assert sum(item["volume"] for item in result["peak_data"]) == 1758
+
+
+def test_representative_jit_peak_is_tuesday_10am():
+    forecast = get_product_forecast("F-02", "PROD-A")
+    component = next(item for item in forecast["component_forecasts"] if item["parts_id"] == "PT-1002")
+    result = calculate_jit_peaks("F-02", "PT-1002", component["recommended_shipping"])
+    assert result["peak_info"]["day"] == "火"
+    assert result["peak_info"]["hour"] == "10:00"
+    assert sum(item["volume"] for item in result["peak_data"]) == component["recommended_shipping"]
+
+
+def test_jit_fallback_for_new_part_without_history():
+    result = calculate_jit_peaks("F-02", "PT-NEW", 280)
+    assert len(result["peak_data"]) == 28
+    assert sum(item["volume"] for item in result["peak_data"]) == 280
+
+
+def test_safety_stock_preview_has_increase_and_decrease_patterns():
+    subprocess.run([sys.executable, "-m", "scripts.generate_demo_data"], cwd=ROOT, check=True)
+    preview = build_safety_stock_preview()
+    assert preview["summary"]["increase"] > 0
+    assert preview["summary"]["decrease"] > 0
 
 
 def test_forecast_returns_dashboard_risk_fields_only():

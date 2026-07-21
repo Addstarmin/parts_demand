@@ -8,6 +8,7 @@ import TargetSelector from "../components/TargetSelector";
 import ProductBomTable from "../components/ProductBomTable";
 import ProductionNoticeSimulator from "../components/ProductionNoticeSimulator";
 import SafetyStockAdmin from "../components/SafetyStockAdmin";
+import DataManagement from "../components/DataManagement";
 import {
   getFactories,
   getForecast,
@@ -348,6 +349,7 @@ function Dashboard() {
     if (currentPage === "parts") return renderParts();
     if (currentPage === "simulation") return renderSimulation();
     if (currentPage === "safety") return <SafetyStockAdmin />;
+    if (currentPage === "data") return <DataManagement />;
     if (currentPage === "settings") return renderSettings();
     return renderDashboard();
   };

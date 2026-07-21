@@ -1,4 +1,4 @@
-import { FiBarChart2, FiBox, FiCpu, FiHome, FiSettings, FiShield } from "react-icons/fi";
+import { FiBarChart2, FiBox, FiCpu, FiDatabase, FiHome, FiSettings, FiShield } from "react-icons/fi";
 
 function Sidebar({ currentPage, setCurrentPage }) {
   const menuItems = [
@@ -26,6 +26,11 @@ function Sidebar({ currentPage, setCurrentPage }) {
       id: "safety",
       label: "安全在庫最適化",
       icon: <FiShield />,
+    },
+    {
+      id: "data",
+      label: "データ管理・実績連携",
+      icon: <FiDatabase />,
     },
     {
       id: "settings",

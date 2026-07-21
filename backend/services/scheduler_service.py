@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from services.safety_stock_service import update_dynamic_safety_stock
+from services.data_management_service import get_weekly_settings, run_weekly_update_now
 
 _scheduler = None
 
@@ -32,6 +33,22 @@ def start_safety_stock_scheduler() -> str:
         max_instances=1,
         coalesce=True,
     )
+    weekly = get_weekly_settings()
+    if weekly.get("enabled"):
+        day_map = {"mon": "mon", "tue": "tue", "wed": "wed", "thu": "thu", "fri": "fri", "sat": "sat", "sun": "sun"}
+        scheduler.add_job(
+            run_weekly_update_now,
+            CronTrigger(
+                day_of_week=day_map.get(weekly.get("day", "mon"), "mon"),
+                hour=int(weekly.get("hour", 6)),
+                minute=int(weekly.get("minute", 0)),
+                timezone=weekly.get("timezone", "Asia/Tokyo"),
+            ),
+            id="cmdx_weekly_data_update",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.start()
     _scheduler = scheduler
     return "running"

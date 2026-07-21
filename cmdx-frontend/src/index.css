@@ -423,6 +423,36 @@ input {
   color: #b91c1c;
 }
 
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.inline-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inline-actions button {
+  border: none;
+  background: #2563eb;
+  color: white;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-weight: 700;
+}
+
+.import-result {
+  margin-top: 18px;
+}
+
+.form-grid input[type="checkbox"] {
+  width: auto;
+  min-height: auto;
+  margin-right: 8px;
+}
+
 .indicator-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

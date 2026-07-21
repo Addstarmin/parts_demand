@@ -33,6 +33,53 @@ CMD-Xは、中部地区の中小部品メーカーが抱える「完成車メー
 - 部品: 6部品以上、PT-1002とPT-5007などは複数製品で共通利用
 - 履歴: 製品需要156週、部品需要156週、LT/予測精度12か月
 
+## デモデータ再生成
+プロジェクトルートから実行:
+
+```bash
+python -m scripts.generate_demo_data
+```
+
+検証も同時に実行:
+
+```bash
+python -m scripts.generate_demo_data --validate
+```
+
+## デモデータ検証
+```bash
+python -m scripts.validate_demo_data
+```
+
+検証では、必須CSV/カラム、ID参照整合性、負値、BOM必要数、JIT便比率と数量合計、代表KPI、完成車A社-20%内示、安全在庫の増加/減少、NaN/Infinity、同一生成の再現性を確認します。
+
+## 推奨デモシナリオ
+1. F-02 三河精密工場を選択
+2. 製品アセンブリを選択
+3. PROD-A キャブレターASSYを選択
+4. 4週間需要予測を表示
+5. 構成部品別表示へ切り替え
+6. PT-1002の部品需要・生産推奨量・発注推奨量・出荷推奨量を確認
+7. JIT出荷ピークで火曜10:00を確認
+8. 完成車A社、-20%で内示シミュレーション
+9. 通常予測と調整後予測を比較
+10. 動的安全在庫プレビューで増加部品・減少部品を確認
+
+## 想定される代表数値
+`python -m scripts.generate_demo_data --validate`実行後の実データに基づく代表値です。
+
+- 来週部品需要: 2,458個
+- 現在庫: 1,800個
+- 安全在庫: 540個
+- 生産推奨量: 1,198個
+- 発注推奨量: 1,198個
+- 出荷推奨量: 2,458個
+- JIT最大ピーク: 火曜10:00、233個
+- 週間JIT合計: 2,458個
+- 完成車A社-20%適用前: 1,229個
+- 完成車A社-20%適用後: 983個
+- 安全在庫変更前後: 540個 -> 270個
+
 ## 環境変数
 実値をソースに入れないでください。`backend/.env.example`を参考に`backend/.env`を作成します。
 
@@ -102,6 +149,149 @@ python -m scripts.update_dynamic_safety_stock
 - `GET /api/download/actual-history.csv`
 - `GET /api/download/forecast.csv`
 - `GET /api/download/future-actual-template.csv`
+
+## データ管理・実績連携
+「データ管理・実績連携」タブでは、現在バックエンドが利用しているCSVを画面から確認、出力、検証、反映できます。CSV更新時はバックアップを作成し、反映後に予測再計算と安全在庫再計算を選択できます。
+
+対象13CSV:
+
+- `factory_master.csv`
+- `parts_master.csv`
+- `product_master.csv`
+- `bom_master.csv`
+- `manufacturer_master.csv`
+- `manufacturer_product_mapping.csv`
+- `product_demand_history.csv`
+- `internal_performance_history.csv`
+- `jit_shipment_history.csv`
+- `lead_time_history.csv`
+- `forecast_accuracy_history.csv`
+- `safety_stock_master.csv`
+- `dynamic_safety_stock.csv`
+
+主なAPI:
+
+- `GET /api/data-management/summary`
+- `GET /api/data-management/datasets`
+- `GET /api/data-management/datasets/{dataset_id}/preview`
+- `GET /api/data-management/datasets/{dataset_id}/download`
+- `GET /api/data-management/export-all`
+- `POST /api/data-management/import/validate`
+- `POST /api/data-management/import/commit`
+- `GET /api/data-management/backups`
+- `POST /api/data-management/backups/{backup_id}/restore`
+- `GET /api/data-management/forecast-export`
+- `GET /api/data-management/future-actual-template`
+- `POST /api/data-management/recalculate/forecast`
+- `POST /api/data-management/recalculate/safety-stock`
+- `POST /api/data-management/recalculate/all`
+- `GET /api/data-management/weekly-update/settings`
+- `PUT /api/data-management/weekly-update/settings`
+- `POST /api/data-management/weekly-update/run-now`
+- `GET /api/data-management/weekly-update/history`
+- `POST /api/data-management/demo/next-week/preview`
+- `POST /api/data-management/demo/next-week/commit`
+
+CSVダウンロード:
+
+1. 「データ管理・実績連携」タブを開く
+2. データセット一覧の`DL`を押す
+3. 現在バックエンドが利用しているCSVをUTF-8 BOM付きで出力
+
+ZIPダウンロード:
+
+1. 「全データ一括ZIP」を押す
+2. 13CSVと`manifest.json`を含むZIPを取得
+
+CSVアップロード:
+
+1. 対象データセットを選択
+2. 更新方式を選択
+3. CSVファイルを選択
+4. 「検証・プレビュー」を押す
+5. エラーがなければ、必要な再計算を選んで「確定反映」
+
+更新方式:
+
+- 追記: 既存キーと重複しない行だけ追加
+- 追記・上書き: 同一キーは更新し、新規キーは追加
+- 全件置換: 対象CSVをすべて置換。バックアップ作成と確認チェックが必要
+
+CSV検証内容:
+
+- 必須カラム、未知カラム、空ファイル
+- 主キー重複、完全重複行
+- 日付、数値、負数、0禁止列
+- ID参照整合性
+- CSV数式インジェクション警告
+- 極端な外れ値警告
+
+バックアップ・復元:
+
+- CSV反映、週次demo追加、復元前に`backend/data/backups/`へバックアップを作成
+- 直近保持件数は`CMDX_BACKUP_RETENTION`で変更
+- 画面のバックアップ一覧から復元可能
+
+予測結果CSV:
+
+- 「予測結果CSV」から出力
+- 製品/部品/全対象の予測、在庫、安全在庫、推奨生産、推奨発注、推奨出荷を含む
+
+将来実績入力テンプレート:
+
+- 「将来実績テンプレート」から出力
+- 予測済み未来週に実績を追記し、再アップロードに利用
+
+実績取り込み後の再計算:
+
+- データのみ反映
+- 予測再計算
+- 安全在庫再計算
+- 予測と安全在庫の両方を再計算
+
+自動週次更新:
+
+- demo source: 現在CSVの最終実績週から次週を算出し、製品需要、部品実績、JIT、予測精度履歴を疑似生成
+- directory source: 指定ディレクトリのCSVを検証し、成功時は`processed`へ、失敗時は`failed`へ移動
+- 設定はSQLiteへ保存し、`.env`は初期値としてのみ利用
+
+関連環境変数:
+
+```bash
+CMDX_BACKUP_RETENTION=10
+CMDX_MAX_UPLOAD_MB=20
+CMDX_ENABLE_WEEKLY_DATA_UPDATE=false
+CMDX_WEEKLY_UPDATE_DAY=mon
+CMDX_WEEKLY_UPDATE_HOUR=6
+CMDX_WEEKLY_UPDATE_MINUTE=0
+CMDX_WEEKLY_UPDATE_TIMEZONE=Asia/Tokyo
+CMDX_WEEKLY_UPDATE_SOURCE=demo
+CMDX_WEEKLY_UPDATE_DIRECTORY=
+```
+
+発表用データ管理デモ手順:
+
+1. 「データ管理・実績連携」タブを開く
+2. 現在のデータ期間、最終実績週、件数を説明
+3. `product_demand_history.csv`をダウンロード
+4. 将来実績入力テンプレートをダウンロード
+5. サンプル実績CSVをアップロード
+6. 検証結果と行別エラー/警告を表示
+7. 追記・更新方式で反映
+8. 最終実績週が更新されたことを確認
+9. 予測と安全在庫を再計算
+10. 既存ダッシュボードで予測値・推奨値がCSV更新後のデータから再計算されることを確認
+11. 「最新週のデモ実績を生成」を実行
+12. 自動更新設定と更新履歴を説明
+13. バックアップ一覧と復元操作を説明
+
+発表説明例:
+
+「現在はデモデータを使用していますが、データ管理画面から企業が保有する実績CSVを取り込み、需要予測や生産・発注・出荷の推奨値へ反映できます。」
+
+「また、現在の実績データや予測結果をCSVで出力し、確定実績を追記して再度取り込むことで、予測精度の評価や安全在庫の再計算に利用できます。」
+
+「さらに、毎週の実績取得を想定した自動更新機能を備えており、実運用では基幹システムや生産管理システムとの連携へ拡張できます。」
 
 ## 5分デモ手順
 1. ダッシュボードでF-02三河精密工場、製品アセンブリ、PROD-Aを選択。
